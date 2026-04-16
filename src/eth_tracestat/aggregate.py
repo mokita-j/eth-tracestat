@@ -56,14 +56,14 @@ def summarize_block(counts: BlockCounts) -> dict:
         "multi_access_rate": multi_access_slots / total_unique_slots if total_unique_slots else 0,
         "n_distribution": dict(sorted(n_distribution.items())),
         "top_shared_slots": [
-            {"contract": k[0], "slot": k[1], "n_ops": n} for k, n in top_shared
+            {"address": k[0], "slot": k[1], "n_ops": n} for k, n in top_shared
         ],
         "total_unique_accounts": total_unique_accounts,
         "multi_call_accounts": multi_call_accounts,
         "multi_call_rate": multi_call_accounts / total_unique_accounts if total_unique_accounts else 0,
         "account_n_distribution": dict(sorted(account_n_distribution.items())),
         "top_shared_accounts": [
-            {"account": a, "n_calls": n} for a, n in top_shared_accounts
+            {"address": a, "n_calls": n} for a, n in top_shared_accounts
         ],
         "tx_slot_distribution": dict(sorted(tx_slot_distribution.items())),
         "tx_account_distribution": dict(sorted(tx_account_distribution.items())),

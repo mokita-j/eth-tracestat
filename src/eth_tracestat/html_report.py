@@ -55,19 +55,19 @@ def write_html_report(results: list, output_path: str):
 
     distributions = [
         ("N(s,B)", "Per-block slot accesses",
-         "Total SLOAD/SSTORE ops on each (contract, slot) within a block "
+         "Total SLOAD/SSTORE ops on each (address, slot) within a block "
          "(summed across all transactions).",
-         "n_distribution", "ops on a slot in the block", "(contract, slot) pairs"),
+         "n_distribution", "ops on a slot in the block", "(address, slot) pairs"),
         ("N(c,B)", "Per-block account calls",
-         "Total calls to each contract within a block (entry points + CALL-family ops, "
+         "Total calls to each address within a block (entry points + CALL-family ops, "
          "summed across all transactions).",
-         "account_n_distribution", "calls to an account in the block", "contracts"),
+         "account_n_distribution", "calls to an address in the block", "addresses"),
         ("N(s,T)", "Per-tx slot accesses",
          "Number of SLOAD/SSTORE ops a single transaction performs on a given slot.",
-         "tx_slot_distribution", "ops within a tx", "(tx, contract, slot) triples"),
+         "tx_slot_distribution", "ops within a tx", "(tx, address, slot) triples"),
         ("N(c,T)", "Per-tx account calls",
-         "Number of times a single transaction calls a given contract (entry + CALL-family).",
-         "tx_account_distribution", "calls within a tx", "(tx, contract) pairs"),
+         "Number of times a single transaction calls a given address (entry + CALL-family).",
+         "tx_account_distribution", "calls within a tx", "(tx, address) pairs"),
     ]
 
     agg_data = {}
@@ -82,13 +82,13 @@ def write_html_report(results: list, output_path: str):
     slot_totals: dict = defaultdict(int)
     for r in results:
         for s in r["top_shared_slots"]:
-            slot_totals[(s["contract"], s["slot"])] += s["n_ops"]
+            slot_totals[(s["address"], s["slot"])] += s["n_ops"]
     top_slots_window = sorted(slot_totals.items(), key=lambda x: x[1], reverse=True)[:20]
 
     acct_totals: dict = defaultdict(int)
     for r in results:
         for a in r["top_shared_accounts"]:
-            acct_totals[a["account"]] += a["n_calls"]
+            acct_totals[a["address"]] += a["n_calls"]
     top_accts_window = sorted(acct_totals.items(), key=lambda x: x[1], reverse=True)[:20]
 
     sections_html = []
@@ -177,15 +177,15 @@ def write_html_report(results: list, output_path: str):
 
   {''.join(sections_html)}
 
-  <h2>Top (contract, slot) pairs by ops — window total</h2>
+  <h2>Top (address, slot) pairs by ops — window total</h2>
   <table>
-    <thead><tr><th>Contract</th><th>Slot</th><th>Σ ops (top-15 per block)</th></tr></thead>
+    <thead><tr><th>Address</th><th>Slot</th><th>Σ ops (top-15 per block)</th></tr></thead>
     <tbody>{top_slots_rows}</tbody>
   </table>
 
-  <h2>Top accounts by calls — window total</h2>
+  <h2>Top addresses by calls — window total</h2>
   <table>
-    <thead><tr><th>Account</th><th>Σ calls (top-15 per block)</th></tr></thead>
+    <thead><tr><th>Address</th><th>Σ calls (top-15 per block)</th></tr></thead>
     <tbody>{top_accts_rows}</tbody>
   </table>
 

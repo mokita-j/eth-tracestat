@@ -34,16 +34,16 @@ def print_result(r: dict):
         print(f"  {n:>4}  {count:>8,}  {pct:>9.1%}  {bar}")
 
     print(f"\n  Top (contract, slot) pairs by ops")
-    print(f"  {'Contract':<42}  {'Slot prefix':<14}  N")
+    print(f"  {'Address':<42}  {'Slot prefix':<14}  N")
     print(f"  {'─'*42}  {'─'*14}  {'─'*4}")
     for s in r['top_shared_slots']:
-        print(f"  {s['contract']:<42}  {s['slot'][:12]}…  {s['n_ops']}")
+        print(f"  {s['address']:<42}  {s['slot'][:12]}…  {s['n_ops']}")
 
     print(f"\n  Top accounts by calls")
-    print(f"  {'Account':<42}  N")
+    print(f"  {'Address':<42}  N")
     print(f"  {'─'*42}  {'─'*4}")
     for a in r['top_shared_accounts']:
-        print(f"  {a['account']:<42}  {a['n_calls']}")
+        print(f"  {a['address']:<42}  {a['n_calls']}")
 
     print(f"\n  N(s,T) distribution (per-tx slot accesses)")
     print(f"  {'N':>4}  {'(tx,slot)':>10}  {'% of total':>10}  histogram")

@@ -21,24 +21,24 @@ class ResultsDB:
             CREATE TABLE IF NOT EXISTS storage_ops (
                 block_num    INTEGER NOT NULL,
                 tx_idx       INTEGER NOT NULL,
-                contract     TEXT NOT NULL,
+                address      TEXT NOT NULL,
                 slot         TEXT NOT NULL,
                 sload_count  INTEGER NOT NULL DEFAULT 0,
                 sstore_count INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY (block_num, tx_idx, contract, slot)
+                PRIMARY KEY (block_num, tx_idx, address, slot)
             );
 
             CREATE TABLE IF NOT EXISTS calls (
                 block_num    INTEGER NOT NULL,
                 tx_idx       INTEGER NOT NULL,
-                contract     TEXT NOT NULL,
+                address      TEXT NOT NULL,
                 call_count   INTEGER NOT NULL,
-                PRIMARY KEY (block_num, tx_idx, contract)
+                PRIMARY KEY (block_num, tx_idx, address)
             );
 
-            CREATE INDEX IF NOT EXISTS idx_storage_ops_contract ON storage_ops(contract);
+            CREATE INDEX IF NOT EXISTS idx_storage_ops_address ON storage_ops(address);
             CREATE INDEX IF NOT EXISTS idx_storage_ops_block ON storage_ops(block_num);
-            CREATE INDEX IF NOT EXISTS idx_calls_contract ON calls(contract);
+            CREATE INDEX IF NOT EXISTS idx_calls_address ON calls(address);
             CREATE INDEX IF NOT EXISTS idx_calls_block ON calls(block_num);
         """)
 
@@ -60,20 +60,20 @@ class ResultsDB:
 
         # Insert per-tx slot ops
         self.conn.executemany(
-            "INSERT INTO storage_ops (block_num, tx_idx, contract, slot, sload_count, sstore_count) "
+            "INSERT INTO storage_ops (block_num, tx_idx, address, slot, sload_count, sstore_count) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             [
-                (counts.block_num, tx_idx, contract, slot, access.sload_count, access.sstore_count)
-                for (tx_idx, contract, slot), access in counts.tx_slot_access.items()
+                (counts.block_num, tx_idx, addr, slot, access.sload_count, access.sstore_count)
+                for (tx_idx, addr, slot), access in counts.tx_slot_access.items()
             ],
         )
 
         # Insert per-tx account calls
         self.conn.executemany(
-            "INSERT INTO calls (block_num, tx_idx, contract, call_count) VALUES (?, ?, ?, ?)",
+            "INSERT INTO calls (block_num, tx_idx, address, call_count) VALUES (?, ?, ?, ?)",
             [
-                (counts.block_num, tx_idx, contract, count)
-                for (tx_idx, contract), count in counts.tx_account_call.items()
+                (counts.block_num, tx_idx, addr, count)
+                for (tx_idx, addr), count in counts.tx_account_call.items()
             ],
         )
 
