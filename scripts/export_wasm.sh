@@ -49,11 +49,15 @@ echo "Exporting Marimo app to WASM..."
 marimo export html-wasm app_wasm.py -o docs/index.html --mode run
 rm app_wasm.py
 
+echo "Patching HTML metadata..."
+sed -i '' 's|<title>app wasm</title>|<title>eth-tracestat</title>|' docs/index.html
+sed -i '' 's|<meta name="description" content="a marimo app" />|<meta name="description" content="Ethereum storage slot and account access pattern analysis" />|' docs/index.html
+
 echo "Compressing results.db for download..."
 sqlite3 data/results.db ".backup /tmp/results_clean.db"
-gzip -c /tmp/results_clean.db > docs/results.db.gz
+gzip -c /tmp/results_clean.db > data/results.db.gz
 rm /tmp/results_clean.db
-echo "  docs/results.db.gz ($(du -h docs/results.db.gz | cut -f1))"
+echo "  data/results.db.gz ($(du -h data/results.db.gz | cut -f1))"
 
 echo ""
 echo "Exported to docs/index.html"

@@ -494,8 +494,7 @@ def _(is_local, local_conn, mo):
         </p>
 
         <p class="section-desc">
-        Download <a href="./results.db.gz" style="color: var(--blue-500);">results.db.gz</a>
-        and run locally:
+        Clone the repo and run locally:
         </p>
 
         ```
