@@ -4,7 +4,9 @@ __pycache__/
 *.egg-info/
 dist/
 traces.db
+data/results.db
 report.html
 __marimo__/
 data.py
+docs/data.py
 app_wasm.py
