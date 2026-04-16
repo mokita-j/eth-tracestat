@@ -6,3 +6,5 @@ dist/
 traces.db
 report.html
 __marimo__/
+data.py
+app_wasm.py

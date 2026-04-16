@@ -1,3 +1,12 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "marimo",
+#     "plotly",
+#     "numpy",
+# ]
+# ///
+
 import marimo
 
 __generated_with = "0.23.1"
@@ -23,9 +32,6 @@ def _(mo):
         --slate-900: #0f172a;
         --blue-500: #3b82f6;
         --blue-600: #2563eb;
-        --cyan-500: #06b6d4;
-        --violet-500: #8b5cf6;
-        --emerald-500: #10b981;
     }
 
     body, .marimo {
@@ -48,9 +54,7 @@ def _(mo):
         font-size: 0.85rem !important;
     }
 
-    p, li, td, th, label, span {
-        font-size: 0.9rem;
-    }
+    p, li, td, th, label, span { font-size: 0.9rem; }
 
     table th {
         font-weight: 600 !important;
@@ -76,13 +80,11 @@ def _(mo):
         margin-bottom: 4px;
     }
 
-    /* SQL explorer — textarea fills space, leaves room for button */
     .sql-col { display: flex; flex-direction: column; height: 100%; }
     .sql-col > :nth-child(2) { flex: 1; overflow: hidden; }
     .sql-col .cm-editor { height: 100% !important; }
     .sql-col .cm-editor .cm-scroller { height: 100% !important; }
 
-    /* Style run button */
     button[data-testid="marimo-plugin-ui-run-button"] {
         background: var(--blue-500) !important;
         color: white !important;
@@ -92,7 +94,6 @@ def _(mo):
         font-family: var(--font-sans) !important;
         font-weight: 500 !important;
         font-size: 0.85rem !important;
-        letter-spacing: 0.02em;
         cursor: pointer;
         transition: background 0.15s ease;
     }
@@ -100,7 +101,13 @@ def _(mo):
         background: var(--blue-600) !important;
     }
 
-    /* Clickable section anchors */
+    .section-desc {
+        color: var(--slate-500);
+        font-size: 1rem;
+        line-height: 1.6;
+        margin: 4px 0 12px 0;
+    }
+
     a.anchor-link {
         color: inherit !important;
         text-decoration: none !important;
@@ -116,13 +123,6 @@ def _(mo):
         font-weight: 400;
         font-size: 0.8em;
     }
-
-    .section-desc {
-        color: var(--slate-500);
-        font-size: 1rem;
-        line-height: 1.6;
-        margin: 4px 0 12px 0;
-    }
     </style>
 
     <span id="top"></span>
@@ -133,26 +133,41 @@ def _(mo):
 
 
 @app.cell
-def _(mo, os, sqlite3):
-    _db_path = "data/results.db"
+def _(json, mo, os):
+    # Detect mode: local (SQLite) or static (pre-computed data)
+    _local_db = "data/results.db"
 
-    if not os.path.exists(_db_path):
-        mo.stop(True, mo.callout(mo.md(
-            "**No data found.** Run the CLI to populate `data/results.db`:\n\n"
-            "```\npython -m eth_tracestat.cli --rpc <url> --start <block> --count 10 "
-            "--results-db data/results.db\n```"
-        ), kind="danger"))
+    # STATIC_DATA_PLACEHOLDER is replaced by the export script with the actual JSON.
+    # When running locally, this stays as None and the app uses SQLite instead.
+    _embedded = None  # STATIC_DATA_EMBED
 
-    conn = sqlite3.connect(_db_path)
+    if os.path.exists(_local_db):
+        import sqlite3 as _sql
+        local_conn = _sql.connect(_local_db)
+        static_data = None
+        is_local = True
+    elif _embedded is not None:
+        local_conn = None
+        static_data = _embedded
+        is_local = False
+    else:
+        # Fallback: try loading docs/data.json (local dev)
+        local_conn = None
+        is_local = False
+        try:
+            with open("docs/data.json") as _f:
+                static_data = json.loads(_f.read())
+        except Exception as _e:
+            mo.stop(True, mo.callout(mo.md(
+                f"**Could not load data.** {_e}"
+            ), kind="danger"))
+            static_data = None
 
-    _range = conn.execute("SELECT MIN(block_num), MAX(block_num) FROM blocks").fetchone()
-    _n_blocks = conn.execute("SELECT COUNT(*) FROM blocks").fetchone()[0]
-    _n_txs = conn.execute("SELECT SUM(n_txs) FROM blocks").fetchone()[0] or 0
-    _n_storage = conn.execute("SELECT COUNT(*) FROM storage_ops").fetchone()[0]
-    _n_calls = conn.execute("SELECT COUNT(*) FROM calls").fetchone()[0]
+    return is_local, local_conn, static_data
 
-    block_min, block_max = _range[0], _range[1]
 
+@app.cell
+def _(is_local, local_conn, mo, static_data):
     def _sc(label, value):
         return (
             f'<div style="flex: 1; min-width: 100px; background: #f8fafc; '
@@ -164,53 +179,67 @@ def _(mo, os, sqlite3):
             f'</div>'
         )
 
+    if is_local:
+        _r = local_conn.execute("SELECT MIN(block_num), MAX(block_num) FROM blocks").fetchone()
+        _m = {
+            "block_min": _r[0], "block_max": _r[1],
+            "n_blocks": local_conn.execute("SELECT COUNT(*) FROM blocks").fetchone()[0],
+            "n_txs": local_conn.execute("SELECT SUM(n_txs) FROM blocks").fetchone()[0] or 0,
+            "n_storage": local_conn.execute("SELECT COUNT(*) FROM storage_ops").fetchone()[0],
+            "n_calls": local_conn.execute("SELECT COUNT(*) FROM calls").fetchone()[0],
+        }
+    else:
+        _m = static_data["meta"]
+
+    _mode_note = (
+        "Full interactive mode — SQLite loaded locally."
+        if is_local else
+        "Static mode — viewing pre-computed data. "
+        '<a href="https://github.com/mokita-j/eth-tracestat" style="color: var(--blue-500);">Run locally</a> '
+        "for block range filtering and SQL explorer."
+    )
+
+    _bmin = _m["block_min"]
+    _bmax = _m["block_max"]
+    _nb = _m["n_blocks"]
+    _nt = _m["n_txs"]
+    _ns = _m["n_storage"]
+    _nc = _m["n_calls"]
+
     mo.vstack([
-        mo.md(
-            '<p class="section-desc">'
-            'Ethereum storage slot & account access patterns. '
-            'Analysis loaded from <code>data/results.db</code> — '
-            'update it by running the CLI with <code>--results-db data/results.db</code>.'
-            '</p>'
-        ),
+        mo.md(f'<p class="section-desc">{_mode_note}</p>'),
         mo.md(
             f'<div style="display: flex; gap: 8px; flex-wrap: wrap;">'
-            f'{_sc("Block range", f"{block_min:,} – {block_max:,}")}'
-            f'{_sc("Blocks", f"{_n_blocks:,}")}'
-            f'{_sc("Transactions", f"{_n_txs:,}")}'
-            f'{_sc("Storage Reads/Writes", f"{_n_storage:,}")}'
-            f'{_sc("Account Calls", f"{_n_calls:,}")}'
+            f'{_sc("Block range", f"{_bmin:,} – {_bmax:,}")}'
+            f'{_sc("Blocks", f"{_nb:,}")}'
+            f'{_sc("Transactions", f"{_nt:,}")}'
+            f'{_sc("Storage Reads/Writes", f"{_ns:,}")}'
+            f'{_sc("Account Calls", f"{_nc:,}")}'
             f'</div>'
         ),
     ], gap=0.5)
-    return block_max, block_min, conn
+    return
 
 
 @app.cell
-def _(block_max, block_min, conn, mo):
-    _all_blocks = [r[0] for r in conn.execute(
-        "SELECT block_num FROM blocks ORDER BY block_num"
-    ).fetchall()]
-
-    _options = {f"{b:,}": b for b in _all_blocks}
-
-    block_from = mo.ui.dropdown(
-        options=_options,
-        value=f"{block_min:,}",
-        label="From block",
-    )
-    block_to = mo.ui.dropdown(
-        options=_options,
-        value=f"{block_max:,}",
-        label="To block",
-    )
-
-    mo.vstack([
-        mo.md(
-            '<p class="section-desc" style="margin-bottom: 4px;">'
-            'Select the block range to analyze. All distributions, tables, and stats below will update accordingly.</p>'
-        ),
-        mo.hstack([block_from, block_to], justify="start", gap=0.75),
-    ], gap=0.3)
+def _(is_local, local_conn, mo):
+    if is_local:
+        _all_blocks = [r[0] for r in local_conn.execute(
+            "SELECT block_num FROM blocks ORDER BY block_num"
+        ).fetchall()]
+        _options = {f"{b:,}": b for b in _all_blocks}
+        block_from = mo.ui.dropdown(options=_options, value=f"{_all_blocks[0]:,}", label="From block")
+        block_to = mo.ui.dropdown(options=_options, value=f"{_all_blocks[-1]:,}", label="To block")
+        mo.vstack([
+            mo.md(
+                '<p class="section-desc" style="margin-bottom: 4px;">'
+                'Select the block range to analyze. All distributions, tables, and stats below will update accordingly.</p>'
+            ),
+            mo.hstack([block_from, block_to], justify="start", gap=0.75),
+        ], gap=0.3)
+    else:
+        block_from = None
+        block_to = None
     return block_from, block_to
 
 
@@ -221,125 +250,15 @@ def _(mo):
 
     <p class="section-desc" style="margin-bottom: 0;">
     <b>N(x, y)</b> = number of accesses of type <b>x</b> per grouping <b>y</b>, where:
-    <b>s</b> = storage slot, <b>a</b> = address, <b>B</b> = block, <b>T</b> = transaction.
+    <b>s</b> = storage slot, <b>a</b> = account address, <b>B</b> = block, <b>T</b> = transaction.
     </p>
     """)
     return
 
 
 @app.cell
-def _(block_from, block_to, conn, make_distribution, mo):
-    _bmin = block_from.value
-    _bmax = block_to.value
-    _params = [_bmin, _bmax]
-
-    # Max unique slots/addresses per block and per tx
-    _max_slots_block = conn.execute(
-        "SELECT MAX(cnt) FROM ("
-        "  SELECT COUNT(DISTINCT address || '|' || slot) AS cnt"
-        "  FROM storage_ops WHERE block_num BETWEEN ? AND ?"
-        "  GROUP BY block_num)", _params
-    ).fetchone()[0] or 0
-
-    _max_addrs_block = conn.execute(
-        "SELECT MAX(cnt) FROM ("
-        "  SELECT COUNT(DISTINCT address) AS cnt"
-        "  FROM calls WHERE block_num BETWEEN ? AND ?"
-        "  GROUP BY block_num)", _params
-    ).fetchone()[0] or 0
-
-    _max_slots_tx = conn.execute(
-        "SELECT MAX(cnt) FROM ("
-        "  SELECT COUNT(DISTINCT address || '|' || slot) AS cnt"
-        "  FROM storage_ops WHERE block_num BETWEEN ? AND ?"
-        "  GROUP BY block_num, tx_idx)", _params
-    ).fetchone()[0] or 0
-
-    _max_addrs_tx = conn.execute(
-        "SELECT MAX(cnt) FROM ("
-        "  SELECT COUNT(DISTINCT address) AS cnt"
-        "  FROM calls WHERE block_num BETWEEN ? AND ?"
-        "  GROUP BY block_num, tx_idx)", _params
-    ).fetchone()[0] or 0
-
-    _defs = [
-        (
-            "SELECT op_count AS n, COUNT(*) AS cnt FROM ("
-            "  SELECT SUM(sload_count + sstore_count) AS op_count"
-            "  FROM storage_ops WHERE block_num BETWEEN ? AND ?"
-            "  GROUP BY block_num, address, slot"
-            ") GROUP BY n ORDER BY n",
-            "N(s, B)", "Per-block slot accesses",
-            "SLOAD+SSTORE ops per (address, slot) per block.",
-            ("Max unique slots/block", f"{_max_slots_block:,}"),
-        ),
-        (
-            "SELECT call_count AS n, COUNT(*) AS cnt FROM ("
-            "  SELECT SUM(call_count) AS call_count"
-            "  FROM calls WHERE block_num BETWEEN ? AND ?"
-            "  GROUP BY block_num, address"
-            ") GROUP BY n ORDER BY n",
-            "N(a, B)", "Per-block account calls",
-            "Calls per address per block. Precompiles excluded.",
-            ("Max unique addresses/block", f"{_max_addrs_block:,}"),
-        ),
-        (
-            "SELECT sload_count + sstore_count AS n, COUNT(*) AS cnt"
-            " FROM storage_ops WHERE block_num BETWEEN ? AND ?"
-            " GROUP BY n ORDER BY n",
-            "N(s, T)", "Per-tx slot accesses",
-            "SLOAD+SSTORE ops per (address, slot) within a single tx.",
-            ("Max unique slots/tx", f"{_max_slots_tx:,}"),
-        ),
-        (
-            "SELECT call_count AS n, COUNT(*) AS cnt"
-            " FROM calls WHERE block_num BETWEEN ? AND ?"
-            " GROUP BY n ORDER BY n",
-            "N(a, T)", "Per-tx account calls",
-            "Calls to an address within one tx. Precompiles excluded.",
-            ("Max unique addresses/tx", f"{_max_addrs_tx:,}"),
-        ),
-    ]
-
-    _sections = []
-    for _i, (_sql, _code, _title, _desc, _extra) in enumerate(_defs):
-        _rows = conn.execute(_sql, _params).fetchall()
-        if _i > 0:
-            _sections.append(mo.md('<hr style="border: none; border-top: 1px solid #e2e8f0; margin: 8px 0;">'))
-        _sections.append(make_distribution(_rows, _code, _title, _desc, _extra))
-
-    # Per-block breakdown
-    _block_rows = conn.execute(
-        "SELECT b.block_num, b.n_txs,"
-        "  (SELECT COUNT(DISTINCT s.address || '|' || s.slot) FROM storage_ops s WHERE s.block_num = b.block_num) AS unique_slots,"
-        "  (SELECT COUNT(DISTINCT c.address) FROM calls c WHERE c.block_num = b.block_num) AS unique_addrs"
-        " FROM blocks b WHERE b.block_num BETWEEN ? AND ? ORDER BY b.block_num",
-        _params,
-    ).fetchall()
-    _block_data = [
-        {"block": r[0], "txs": r[1], "unique_slots": r[2], "unique_addresses": r[3]}
-        for r in _block_rows
-    ]
-
-    _sections.append(
-        mo.accordion({
-            f"Per-block breakdown ({len(_block_data)} blocks)": mo.ui.table(
-                _block_data,
-                selection=None,
-                pagination=False,
-                show_column_summaries=False,
-                show_data_types=False,
-                show_download=False,
-            ) if _block_data else mo.md("*No data*"),
-        })
-    )
-
-    mo.vstack(_sections, gap=1)
-    return
-
-
-@app.cell
-def _(go, mo, np):
+def _(block_from, block_to, go, is_local, local_conn, mo, np, static_data):
+    # --- Helper to build a distribution section ---
     CHART_COLOR = "#3b82f6"
 
     def _stat_card(label, value):
@@ -353,94 +272,61 @@ def _(go, mo, np):
             f'</div>'
         )
 
-    def make_distribution(rows, code, title, desc, extra_stat=None):
+    def _make_section(rows, code, title, desc, extra_stat=None):
         if not rows:
-            return mo.callout(mo.md(f"**{code}** — no data for this selection."), kind="warn")
+            return mo.callout(mo.md(f"**{code}** — no data."), kind="warn")
 
         ns = np.array([r[0] for r in rows])
         cnts = np.array([r[1] for r in rows])
         total = int(cnts.sum())
         weighted = int((ns * cnts).sum())
         cdf = np.cumsum(cnts) / total
-
         p50 = int(ns[np.searchsorted(cdf, 0.50)])
         n1_cnt = int(cnts[ns == 1].sum()) if 1 in ns else 0
         n1_pct = n1_cnt / total
 
-        cards = [
-            ("Total", f"{total:,}"),
-            ("Mean", f"{weighted/total:.2f}"),
-            ("Median", str(p50)),
-            ("Max N", f"{int(ns[-1]):,}"),
-            ("N=1", f"{n1_pct:.1%}"),
-            ("N>=2", f"{1-n1_pct:.1%}"),
-        ]
+        cards = [("Total", f"{total:,}"), ("Mean", f"{weighted/total:.2f}"),
+                 ("Median", str(p50)), ("Max N", f"{int(ns[-1]):,}"),
+                 ("N=1", f"{n1_pct:.1%}"), ("N>=2", f"{1 - n1_pct:.1%}")]
         if extra_stat:
             cards.append(extra_stat)
 
         stats = mo.md(
             f'<div style="display: flex; gap: 8px; padding: 0 56px; flex-wrap: wrap;">'
-            f'{"".join(_stat_card(l, v) for l, v in cards)}'
-            f'</div>'
+            f'{"".join(_stat_card(l, v) for l, v in cards)}</div>'
         )
 
         max_bins = 50
         if len(ns) > max_bins:
             cap = int(ns[max_bins - 1])
-            display_cnts = list(cnts[:max_bins - 1]) + [int(cnts[max_bins - 1:].sum())]
+            d_cnts = list(cnts[:max_bins - 1]) + [int(cnts[max_bins - 1:].sum())]
             labels = [str(int(n)) for n in ns[:max_bins - 1]] + [f"\u2265{cap}"]
         else:
-            display_cnts = list(cnts)
+            d_cnts = list(cnts)
             labels = [str(int(n)) for n in ns]
 
-        pcts = [f"{c / total:.1%}" for c in display_cnts]
-        use_log = max(display_cnts) / max(1, min(c for c in display_cnts if c > 0)) > 20
+        pcts = [f"{c / total:.1%}" for c in d_cnts]
+        use_log = max(d_cnts) / max(1, min(c for c in d_cnts if c > 0)) > 20
 
         fig = go.Figure()
         fig.add_trace(go.Bar(
-            x=labels,
-            y=display_cnts,
-            marker_color=CHART_COLOR,
-            marker_line_width=0,
-            marker_opacity=0.85,
-            customdata=pcts,
-            hovertemplate=(
-                "<b>N = %{x}</b><br>"
-                "Count: %{y:,}<br>"
-                "Share: %{customdata}"
-                "<extra></extra>"
-            ),
+            x=labels, y=d_cnts, marker_color=CHART_COLOR,
+            marker_line_width=0, marker_opacity=0.85, customdata=pcts,
+            hovertemplate="<b>N = %{x}</b><br>Count: %{y:,}<br>Share: %{customdata}<extra></extra>",
         ))
-
         fig.update_layout(
             font=dict(family="Inter, system-ui, sans-serif", size=12, color="#475569"),
-            height=250,
-            margin=dict(l=60, r=60, t=6, b=44),
-            xaxis=dict(
-                title=dict(text="N", font=dict(size=11, color="#94a3b8")),
-                tickangle=-45 if len(labels) > 25 else 0,
-                tickfont=dict(size=10, family="JetBrains Mono, monospace"),
-                showline=True,
-                linewidth=1,
-                linecolor="#e2e8f0",
-                zeroline=False,
-            ),
-            yaxis=dict(
-                title=dict(text="Frequency", font=dict(size=11, color="#94a3b8")),
-                type="log" if use_log else "linear",
-                tickfont=dict(size=10),
-                showline=False,
-                gridcolor="#f1f5f9",
-                zeroline=False,
-            ),
-            plot_bgcolor="white",
-            paper_bgcolor="white",
-            bargap=0.2,
-            hoverlabel=dict(
-                bgcolor="white",
-                bordercolor="#e2e8f0",
-                font=dict(size=12, family="Inter, sans-serif", color="#0f172a"),
-            ),
+            height=250, margin=dict(l=60, r=60, t=6, b=44),
+            xaxis=dict(title=dict(text="N", font=dict(size=11, color="#94a3b8")),
+                       tickangle=-45 if len(labels) > 25 else 0,
+                       tickfont=dict(size=10, family="JetBrains Mono, monospace"),
+                       showline=True, linewidth=1, linecolor="#e2e8f0", zeroline=False),
+            yaxis=dict(title=dict(text="Frequency", font=dict(size=11, color="#94a3b8")),
+                       type="log" if use_log else "linear", tickfont=dict(size=10),
+                       showline=False, gridcolor="#f1f5f9", zeroline=False),
+            plot_bgcolor="white", paper_bgcolor="white", bargap=0.2,
+            hoverlabel=dict(bgcolor="white", bordercolor="#e2e8f0",
+                            font=dict(size=12, family="Inter, sans-serif", color="#0f172a")),
         )
         fig.update_xaxes(gridcolor="rgba(0,0,0,0)")
 
@@ -449,70 +335,142 @@ def _(go, mo, np):
             f'### <a id="{_anchor}" href="#{_anchor}" class="anchor-link">{code} — {title}</a>\n'
             f'<p class="section-desc">{desc}</p>'
         )
-
         return mo.vstack([header, stats, fig], gap=0.4)
 
-    return (make_distribution,)
+    # --- Build all 4 distributions ---
+    _defs = [
+        ("ns_b",
+         "SELECT op_count AS n, COUNT(*) AS cnt FROM ("
+         "  SELECT SUM(sload_count + sstore_count) AS op_count"
+         "  FROM storage_ops WHERE block_num BETWEEN ? AND ?"
+         "  GROUP BY block_num, address, slot) GROUP BY n ORDER BY n",
+         "N(s, B)", "Per-block slot accesses",
+         "SLOAD+SSTORE ops per (address, slot) per block. Measures block-level storage warming potential.",
+         "max_slots_block", "Max unique slots/block"),
+        ("na_b",
+         "SELECT call_count AS n, COUNT(*) AS cnt FROM ("
+         "  SELECT SUM(call_count) AS call_count FROM calls WHERE block_num BETWEEN ? AND ?"
+         "  GROUP BY block_num, address) GROUP BY n ORDER BY n",
+         "N(a, B)", "Per-block account calls",
+         "Calls per address per block. Precompiles excluded.",
+         "max_addrs_block", "Max unique addresses/block"),
+        ("ns_t",
+         "SELECT sload_count + sstore_count AS n, COUNT(*) AS cnt"
+         " FROM storage_ops WHERE block_num BETWEEN ? AND ? GROUP BY n ORDER BY n",
+         "N(s, T)", "Per-tx slot accesses",
+         "SLOAD+SSTORE ops per (address, slot) within a single tx.",
+         "max_slots_tx", "Max unique slots/tx"),
+        ("na_t",
+         "SELECT call_count AS n, COUNT(*) AS cnt"
+         " FROM calls WHERE block_num BETWEEN ? AND ? GROUP BY n ORDER BY n",
+         "N(a, T)", "Per-tx account calls",
+         "Calls to a single address within one tx.",
+         "max_addrs_tx", "Max unique addresses/tx"),
+    ]
 
+    _sections = []
+    for _i, (_key, _sql, _code, _title, _desc, _extra_key, _extra_label) in enumerate(_defs):
+        if _i > 0:
+            _sections.append(mo.md('<hr style="border: none; border-top: 1px solid #e2e8f0; margin: 8px 0;">'))
 
-@app.cell
-def _(mo):
-    mo.md("""
-    <hr style="border: none; border-top: 2px solid #e2e8f0; margin: 16px 0;">
-    """)
+        if is_local:
+            _bmin = block_from.value
+            _bmax = block_to.value
+            _rows = local_conn.execute(_sql, [_bmin, _bmax]).fetchall()
+            _extra_val = local_conn.execute(
+                f"SELECT MAX(cnt) FROM (SELECT COUNT(DISTINCT "
+                f"{'address || chr(124) || slot' if 's' in _key else 'address'}"
+                f") AS cnt FROM {'storage_ops' if 's' in _key else 'calls'}"
+                f" WHERE block_num BETWEEN ? AND ?"
+                f" GROUP BY {'block_num' if 'b' in _key else 'block_num, tx_idx'})",
+                [_bmin, _bmax],
+            ).fetchone()[0] or 0
+        else:
+            _rows = static_data["distributions"][_key]
+            _extra_val = static_data["extra_stats"][_extra_key]
+
+        _sections.append(_make_section(
+            _rows, _code, _title, _desc,
+            (_extra_label, f"{_extra_val:,}"),
+        ))
+
+    # Per-block breakdown
+    if is_local:
+        _block_rows = local_conn.execute(
+            "SELECT b.block_num, b.n_txs,"
+            "  (SELECT COUNT(DISTINCT s.address || '|' || s.slot) FROM storage_ops s WHERE s.block_num = b.block_num),"
+            "  (SELECT COUNT(DISTINCT c.address) FROM calls c WHERE c.block_num = b.block_num)"
+            " FROM blocks b WHERE b.block_num BETWEEN ? AND ? ORDER BY b.block_num",
+            [block_from.value, block_to.value],
+        ).fetchall()
+        _block_data = [{"block": r[0], "txs": r[1], "unique_slots": r[2], "unique_addresses": r[3]}
+                       for r in _block_rows]
+    else:
+        _block_data = static_data["per_block"]
+
+    _sections.append(
+        mo.accordion({
+            f"Per-block breakdown ({len(_block_data)} blocks)": mo.ui.table(
+                _block_data, selection=None, pagination=False,
+                show_column_summaries=False, show_data_types=False, show_download=False,
+            ) if _block_data else mo.md("*No data*"),
+        })
+    )
+
+    mo.vstack(_sections, gap=1)
     return
 
 
 @app.cell
 def _(mo):
+    mo.md('<hr style="border: none; border-top: 2px solid #e2e8f0; margin: 16px 0;">')
+    return
+
+
+@app.cell
+def _(block_from, block_to, is_local, local_conn, mo, static_data):
     mo.md("""
     ## <a id="top-slots-accounts" href="#top-slots-accounts" class="anchor-link">Top slots & accounts</a>
 
     <p class="section-desc">Ranked by total ops/calls across the selected block range.</p>
     """)
-    return
 
-
-@app.cell
-def _(block_from, block_to, conn, mo):
-    _bmin = block_from.value
-    _bmax = block_to.value
-
-    _where = "WHERE block_num BETWEEN ? AND ?"
-    _params = [_bmin, _bmax]
-
-    _slots = conn.execute(
-        f"SELECT address, slot, SUM(sload_count) AS reads, SUM(sstore_count) AS writes, "
-        f"SUM(sload_count + sstore_count) AS total "
-        f"FROM storage_ops {_where} "
-        f"GROUP BY address, slot ORDER BY total DESC LIMIT 30",
-        _params,
-    ).fetchall()
-
-    _accts = conn.execute(
-        f"SELECT address, SUM(call_count) AS total, COUNT(DISTINCT block_num) AS blocks "
-        f"FROM calls {_where} "
-        f"GROUP BY address ORDER BY total DESC LIMIT 30",
-        _params,
-    ).fetchall()
-
-    _slot_data = [
-        {"address": r[0], "slot": f"0x{r[1][:16]}...", "SLOADs": r[2], "SSTOREs": r[3], "total": r[4]}
-        for r in _slots
-    ]
-    _acct_data = [
-        {"address": r[0], "total_calls": r[1], "blocks_present": r[2]}
-        for r in _accts
-    ]
+    if is_local:
+        _bmin, _bmax = block_from.value, block_to.value
+        _params = [_bmin, _bmax]
+        _slots = local_conn.execute(
+            "SELECT address, slot, SUM(sload_count), SUM(sstore_count), "
+            "SUM(sload_count + sstore_count) AS total "
+            "FROM storage_ops WHERE block_num BETWEEN ? AND ? "
+            "GROUP BY address, slot ORDER BY total DESC LIMIT 30", _params,
+        ).fetchall()
+        _accts = local_conn.execute(
+            "SELECT address, SUM(call_count) AS total, COUNT(DISTINCT block_num) "
+            "FROM calls WHERE block_num BETWEEN ? AND ? "
+            "GROUP BY address ORDER BY total DESC LIMIT 30", _params,
+        ).fetchall()
+        _slot_data = [{"address": r[0], "slot": f"0x{r[1][:16]}...", "SLOADs": r[2], "SSTOREs": r[3], "total": r[4]}
+                      for r in _slots]
+        _acct_data = [{"address": r[0], "total_calls": r[1], "blocks_present": r[2]}
+                      for r in _accts]
+    else:
+        _slot_data = [{"address": s["address"], "slot": f"0x{s['slot'][:16]}...",
+                       "SLOADs": s["sloads"], "SSTOREs": s["sstores"], "total": s["total"]}
+                      for s in static_data["top_slots"]]
+        _acct_data = static_data["top_accounts"]
 
     mo.hstack([
         mo.vstack([
             mo.md('<span class="section-label" style="background: #3b82f618; color: #3b82f6;">STORAGE SLOTS</span>'),
-            mo.ui.table(_slot_data, selection=None) if _slot_data else mo.md("*No data*"),
+            mo.ui.table(_slot_data, selection=None, pagination=False,
+                        show_column_summaries=False, show_data_types=False, show_download=False)
+            if _slot_data else mo.md("*No data*"),
         ]),
         mo.vstack([
-            mo.md('<span class="section-label" style="background: #06b6d418; color: #06b6d4;">ACCOUNTS</span>'),
-            mo.ui.table(_acct_data, selection=None) if _acct_data else mo.md("*No data*"),
+            mo.md('<span class="section-label" style="background: #3b82f618; color: #3b82f6;">ACCOUNTS</span>'),
+            mo.ui.table(_acct_data, selection=None, pagination=False,
+                        show_column_summaries=False, show_data_types=False, show_download=False)
+            if _acct_data else mo.md("*No data*"),
         ]),
     ], widths=[3, 2])
     return
@@ -520,14 +478,34 @@ def _(block_from, block_to, conn, mo):
 
 @app.cell
 def _(mo):
-    mo.md("""
-    <hr style="border: none; border-top: 2px solid #e2e8f0; margin: 16px 0;">
-    """)
+    mo.md('<hr style="border: none; border-top: 2px solid #e2e8f0; margin: 16px 0;">')
     return
 
 
 @app.cell
-def _(mo):
+def _(is_local, local_conn, mo):
+    if not is_local:
+        mo.md("""
+        ## <a id="sql-explorer" href="#sql-explorer" class="anchor-link">SQL explorer</a>
+
+        <p class="section-desc">
+        The SQL explorer is available when running locally with <code>marimo run app.py</code>.
+        It requires direct access to the SQLite database for arbitrary queries.
+        </p>
+
+        <p class="section-desc">
+        Download <a href="./results.db.gz" style="color: var(--blue-500);">results.db.gz</a>
+        and run locally:
+        </p>
+
+        ```
+        pip install eth-tracestat marimo plotly numpy
+        gunzip results.db.gz -c > data/results.db
+        marimo run app.py
+        ```
+        """)
+        return
+
     mo.md("""
     ## <a id="sql-explorer" href="#sql-explorer" class="anchor-link">SQL explorer</a>
 
@@ -537,11 +515,7 @@ def _(mo):
     filter by address, find the heaviest transactions, compare read/write ratios, etc.
     </p>
     """)
-    return
 
-
-@app.cell
-def _(mo):
     sql_input = mo.ui.text_area(
         value="SELECT address,\n"
               "       SUM(sload_count + sstore_count) AS total_ops,\n"
@@ -570,17 +544,10 @@ def _(mo):
         {"table": "", "column": "address", "type": "TEXT"},
         {"table": "", "column": "call_count", "type": "INT"},
     ]
-
     _schema = mo.vstack([
         mo.md('<span class="section-label" style="background: #3b82f618; color: #3b82f6;">Database schema</span>'),
-        mo.ui.table(
-            _schema_data,
-            selection=None,
-            pagination=False,
-            show_column_summaries=False,
-            show_data_types=False,
-            show_download=False,
-        ),
+        mo.ui.table(_schema_data, selection=None, pagination=False,
+                    show_column_summaries=False, show_data_types=False, show_download=False),
     ], gap=0.3)
 
     mo.hstack([
@@ -593,11 +560,14 @@ def _(mo):
             '</div>'
         ),
     ], widths=[1, 3], align="stretch")
-    return run_button, sql_input
+    return local_conn, run_button, sql_input
 
 
 @app.cell
-def _(conn, mo, run_button, sql_input):
+def _(is_local, local_conn, mo, run_button, sql_input):
+    if not is_local:
+        return
+
     mo.stop(not run_button.value)
 
     _query = sql_input.value.strip()
@@ -605,7 +575,7 @@ def _(conn, mo, run_button, sql_input):
         mo.stop(True, mo.md("*Enter a query above.*"))
 
     try:
-        _cur = conn.execute(_query)
+        _cur = local_conn.execute(_query)
         _cols = [desc[0] for desc in _cur.description]
         _rows = _cur.fetchall()
         _data = [dict(zip(_cols, row)) for row in _rows]
@@ -619,13 +589,13 @@ def _(conn, mo, run_button, sql_input):
 
 @app.cell
 def _():
+    import json
     import marimo as mo
     import numpy as np
     import os
     import plotly.graph_objects as go
-    import sqlite3
 
-    return go, mo, np, os, sqlite3
+    return go, json, mo, np, os
 
 
 if __name__ == "__main__":
