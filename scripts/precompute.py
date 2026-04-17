@@ -96,6 +96,119 @@ def main():
         ],
     }
 
+    # Warm analysis (Phases 1–4)
+    def _warm_per_block():
+        rows = conn.execute("""
+            SELECT
+                block_num,
+                SUM(sload_count + sstore_count)            AS T,
+                COUNT(*)                                   AS U_tx,
+                COUNT(DISTINCT address || '|' || slot)     AS U_block
+            FROM storage_ops
+            GROUP BY block_num
+            ORDER BY block_num
+        """).fetchall()
+        out = []
+        for block_num, T, U_tx, U_block in rows:
+            if T == 0:
+                continue
+            out.append({
+                "block": block_num, "T": T, "U_tx": U_tx, "U_block": U_block,
+                "within_warm": T - U_tx,
+                "cross_warm": U_tx - U_block,
+                "warm_rate": round((T - U_block) / T, 6),
+                "within_rate": round((T - U_tx) / T, 6),
+                "cross_rate": round((U_tx - U_block) / T, 6),
+            })
+        return out
+
+    def _concentration():
+        totals = {
+            row[0]: (row[1], row[2])
+            for row in conn.execute("""
+                SELECT block_num,
+                       SUM(sload_count + sstore_count) AS T,
+                       COUNT(DISTINCT address || '|' || slot) AS U_block
+                FROM storage_ops GROUP BY block_num
+            """).fetchall()
+        }
+        from collections import defaultdict
+        slot_cnts = defaultdict(list)
+        for row in conn.execute("""
+            SELECT block_num, SUM(sload_count + sstore_count) AS n
+            FROM storage_ops
+            GROUP BY block_num, address, slot
+            ORDER BY block_num, n DESC
+        """).fetchall():
+            slot_cnts[row[0]].append(row[1])
+        out = []
+        for block_num, (T, U_block) in sorted(totals.items()):
+            if T == 0:
+                continue
+            cnts = slot_cnts[block_num]
+            out.append({
+                "block": block_num, "T": T, "U_block": U_block,
+                "unique_ratio": round(U_block / T, 6),
+                "top10_share": round(sum(cnts[:10]) / T, 6),
+                "top50_share": round(sum(cnts[:50]) / T, 6),
+            })
+        return out
+
+    def _freq_pool():
+        rows = conn.execute("""
+            SELECT SUM(sload_count + sstore_count) AS n
+            FROM storage_ops
+            GROUP BY block_num, address, slot
+        """).fetchall()
+        buckets = {"1": 0, "2": 0, "3-5": 0, "6-10": 0, "11+": 0}
+        for (n,) in rows:
+            if n == 1:
+                buckets["1"] += 1
+            elif n == 2:
+                buckets["2"] += 1
+            elif n <= 5:
+                buckets["3-5"] += 1
+            elif n <= 10:
+                buckets["6-10"] += 1
+            else:
+                buckets["11+"] += 1
+        return buckets
+
+    def _warm_by_contract():
+        rows = conn.execute("""
+            SELECT address,
+                   SUM(total_access)                        AS total_accesses,
+                   SUM(unique_slots)                        AS cold_accesses,
+                   SUM(total_access - unique_slots)         AS warm_accesses,
+                   COUNT(DISTINCT block_num)                AS blocks_present
+            FROM (
+                SELECT block_num, address,
+                       SUM(sload_count + sstore_count)      AS total_access,
+                       COUNT(DISTINCT slot)                 AS unique_slots
+                FROM storage_ops GROUP BY block_num, address
+            ) sub
+            GROUP BY address
+            ORDER BY warm_accesses DESC
+        """).fetchall()
+        return [
+            {
+                "address": r[0],
+                "total_accesses": r[1],
+                "cold_accesses": r[2],
+                "warm_accesses": r[3],
+                "blocks_present": r[4],
+                "short_addr": r[0][:6] + "…" + r[0][-4:],
+            }
+            for r in rows if r[3] and r[3] > 0
+        ]
+
+    data["warm_analysis"] = {
+        "per_block_warm": _warm_per_block(),
+        "per_block_concentration": _concentration(),
+        "access_frequency_pool": _freq_pool(),
+        "warm_by_contract": _warm_by_contract(),
+    }
+
     conn.close()
 
     # Write JSON

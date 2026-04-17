@@ -43,6 +43,8 @@ def parse_args():
     p.add_argument("--json-out", help="Write summary JSON results to file")
     p.add_argument("--html-out",
                    help="Write HTML report with charts")
+    p.add_argument("--warm-report", metavar="DB",
+                   help="Print warm-rate summary stats from a results.db and exit")
     return p.parse_args()
 
 
@@ -110,8 +112,61 @@ def fetch_or_cache(url: str | None, block_num: int, cache: TraceCache | None) ->
     return block_data, traces
 
 
+def _print_warm_report(db_path: str) -> None:
+    import sqlite3
+    from .warm_analysis import per_block_warm, warm_by_contract
+
+    conn = sqlite3.connect(db_path)
+    rows = per_block_warm(conn)
+    if not rows:
+        print("No data in results DB.", file=sys.stderr)
+        conn.close()
+        return
+
+    warm_rates = [r["warm_rate"] for r in rows]
+    within_rates = [r["within_rate"] for r in rows]
+    cross_rates = [r["cross_rate"] for r in rows]
+    n = len(warm_rates)
+
+    def _stats(vals, label):
+        s = sorted(vals)
+        mean = sum(s) / len(s)
+        p5 = s[max(0, int(0.05 * len(s)) - 1)]
+        p50 = s[len(s) // 2]
+        p95 = s[min(len(s) - 1, int(0.95 * len(s)))]
+        print(f"  {label:<22}  mean={mean:.4f}  p5={p5:.4f}  p50={p50:.4f}  p95={p95:.4f}")
+
+    total_T = sum(r["T"] for r in rows)
+    total_warm = sum(r["within_warm"] + r["cross_warm"] for r in rows)
+    total_within = sum(r["within_warm"] for r in rows)
+    total_cross = sum(r["cross_warm"] for r in rows)
+
+    print(f"\n=== Warm-rate report — {n} blocks ===")
+    print(f"\n  Total accesses     : {total_T:,}")
+    print(f"  Total warm         : {total_warm:,}  ({total_warm / total_T:.4f})")
+    print(f"  Within-tx warm     : {total_within:,}  ({total_within / total_T:.4f})")
+    print(f"  Cross-tx warm      : {total_cross:,}  ({total_cross / total_T:.4f})")
+    print(f"  Cross / total warm : {total_cross / total_warm:.4f}" if total_warm else "")
+    print()
+    _stats(warm_rates, "Warm rate")
+    _stats(within_rates, "Within-tx rate")
+    _stats(cross_rates, "Cross-tx rate")
+
+    contracts = warm_by_contract(conn)[:10]
+    if contracts:
+        print(f"\n  Top 10 contracts by warm accesses:")
+        for i, c in enumerate(contracts, 1):
+            print(f"  {i:>2}. {c['address']}  warm={c['warm_accesses']:,}")
+
+    conn.close()
+
+
 def main():
     args = parse_args()
+
+    if args.warm_report:
+        _print_warm_report(args.warm_report)
+        return
 
     # Open cache / results DB
     cache = None
