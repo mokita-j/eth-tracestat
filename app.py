@@ -528,7 +528,10 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
             })
 
     if not _warm_data:
-        mo.callout(mo.md("**No warm-rate data.** Run locally with results.db populated."), kind="warn")
+        _phase1_out = mo.callout(
+            mo.md("**No warm-rate data.** Run locally with results.db populated."),
+            kind="warn",
+        )
     else:
         import plotly.graph_objects as _go2
         _rates = [d["warm_rate"] for d in _warm_data]
@@ -573,7 +576,8 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
             plot_bgcolor="white", paper_bgcolor="white",
         )
 
-        mo.vstack([mo.md(_stats_html), _fig1], gap=0.6)
+        _phase1_out = mo.vstack([mo.md(_stats_html), mo.ui.plotly(_fig1)], gap=0.6)
+    _phase1_out
     return
 
 
@@ -626,7 +630,10 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
             })
 
     if not _wd2:
-        mo.callout(mo.md("**No decomposition data.** Run locally with results.db populated."), kind="warn")
+        _phase2_out = mo.callout(
+            mo.md("**No decomposition data.** Run locally with results.db populated."),
+            kind="warn",
+        )
     else:
         import plotly.graph_objects as _go3
         _sorted_wd2 = sorted(_wd2, key=lambda d: d["warm_rate"])
@@ -681,7 +688,8 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
 
-        mo.vstack([_stats2, _fig2], gap=0.6)
+        _phase2_out = mo.vstack([_stats2, mo.ui.plotly(_fig2)], gap=0.6)
+    _phase2_out
     return
 
 
@@ -782,7 +790,10 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
         ]
 
     if not _conc_data:
-        mo.callout(mo.md("**No concentration data.** Run locally with results.db populated."), kind="warn")
+        _phase3_out = mo.callout(
+            mo.md("**No concentration data.** Run locally with results.db populated."),
+            kind="warn",
+        )
     else:
         import plotly.graph_objects as _go4
 
@@ -868,23 +879,24 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
             plot_bgcolor="white", paper_bgcolor="white",
         )
 
-        mo.vstack([
+        _phase3_out = mo.vstack([
             _stats3,
             mo.hstack([
                 mo.vstack([
                     mo.md('<span class="section-label" style="background: #8b5cf618; color: #8b5cf6;">Unique slot ratio histogram</span>'),
-                    _fig_hist,
+                    mo.ui.plotly(_fig_hist),
                 ]),
                 mo.vstack([
                     mo.md('<span class="section-label" style="background: #8b5cf618; color: #8b5cf6;">Unique ratio vs warm rate</span>'),
-                    _fig_scat,
+                    mo.ui.plotly(_fig_scat),
                 ]),
             ]),
             mo.vstack([
                 mo.md('<span class="section-label" style="background: #10b98118; color: #10b981;">Access frequency distribution (pooled, log scale)</span>'),
-                _fig_freq,
+                mo.ui.plotly(_fig_freq),
             ]),
         ], gap=0.6)
+    _phase3_out
     return
 
 
@@ -944,7 +956,10 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
         ]
 
     if not _ca_data:
-        mo.callout(mo.md("**No contract attribution data.** Run locally with results.db populated."), kind="warn")
+        _phase4_out = mo.callout(
+            mo.md("**No contract attribution data.** Run locally with results.db populated."),
+            kind="warn",
+        )
     else:
         import plotly.graph_objects as _go5
 
@@ -1029,17 +1044,18 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
             height=380, margin=dict(t=10, l=10, r=10, b=10),
         )
 
-        mo.vstack([
+        _phase4_out = mo.vstack([
             _stats4,
             mo.vstack([
                 mo.md('<span class="section-label" style="background: #3b82f618; color: #3b82f6;">Top contracts by warm access contribution</span>'),
-                _fig_bar,
+                mo.ui.plotly(_fig_bar),
             ]),
             mo.vstack([
                 mo.md('<span class="section-label" style="background: #3b82f618; color: #3b82f6;">Warm access share — top 5 / top 10 / rest</span>'),
-                _fig_tree,
+                mo.ui.plotly(_fig_tree),
             ]),
         ], gap=0.6)
+    _phase4_out
     return
 
 
