@@ -377,12 +377,14 @@ def _(block_from, block_to, go, is_local, local_conn, mo, np, static_data):
             _bmin = block_from.value
             _bmax = block_to.value
             _rows = local_conn.execute(_sql, [_bmin, _bmax]).fetchall()
+            _distinct_expr = "address || '|' || slot" if 's' in _key else 'address'
+            _table_name = 'storage_ops' if 's' in _key else 'calls'
+            _group_by = 'block_num' if 'b' in _key else 'block_num, tx_idx'
             _extra_val = local_conn.execute(
-                f"SELECT MAX(cnt) FROM (SELECT COUNT(DISTINCT "
-                f"{'address || chr(124) || slot' if 's' in _key else 'address'}"
-                f") AS cnt FROM {'storage_ops' if 's' in _key else 'calls'}"
+                f"SELECT MAX(cnt) FROM (SELECT COUNT(DISTINCT {_distinct_expr})"
+                f" AS cnt FROM {_table_name}"
                 f" WHERE block_num BETWEEN ? AND ?"
-                f" GROUP BY {'block_num' if 'b' in _key else 'block_num, tx_idx'})",
+                f" GROUP BY {_group_by})",
                 [_bmin, _bmax],
             ).fetchone()[0] or 0
         else:
