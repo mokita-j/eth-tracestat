@@ -27,6 +27,11 @@ class BlockCounts:
     """Full per-key counts for a single block."""
     block_num: int
     n_txs: int
+    gas_used: int | None = None
+    gas_limit: int | None = None
+    miner: str | None = None
+    base_fee: int | None = None
+    timestamp: int | None = None
     # Per-block: (contract, slot) -> {sload, sstore}
     slot_ops: dict[tuple[str, str], SlotAccess] = field(default_factory=dict)
     # Per-block: contract -> call count
@@ -115,6 +120,10 @@ def process_tx_trace(
         prev_depth = depth
 
 
+def _hex_to_int(v):
+    return int(v, 16) if isinstance(v, str) else v
+
+
 def process_block_traces(
     block_data: dict,
     traces: list[dict],
@@ -126,7 +135,15 @@ def process_block_traces(
         to = tx.get("to")
         tx_entry_addrs.append(to.lower() if to else f"0xcreate_tx{i}")
 
-    counts = BlockCounts(block_num=block_num, n_txs=len(traces))
+    counts = BlockCounts(
+        block_num=block_num,
+        n_txs=len(traces),
+        gas_used=_hex_to_int(block_data.get("gasUsed")),
+        gas_limit=_hex_to_int(block_data.get("gasLimit")),
+        miner=(block_data.get("miner") or "").lower() or None,
+        base_fee=_hex_to_int(block_data.get("baseFeePerGas")),
+        timestamp=_hex_to_int(block_data.get("timestamp")),
+    )
 
     for tx_idx, tx_trace in enumerate(traces):
         entry = tx_entry_addrs[tx_idx] if tx_idx < len(tx_entry_addrs) else "unknown"

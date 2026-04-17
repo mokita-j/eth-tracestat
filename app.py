@@ -1150,23 +1150,23 @@ def _(is_local, local_conn, mo):
 
 @app.cell
 def _(is_local, local_conn, mo, run_button, sql_input):
-    if is_local:
-        mo.stop(not run_button.value)
+    mo.stop(not is_local)
+    mo.stop(not run_button.value)
 
-        _query = sql_input.value.strip()
-        if not _query:
-            mo.stop(True, mo.md("*Enter a query above.*"))
+    _query = sql_input.value.strip()
+    if not _query:
+        mo.stop(True, mo.md("*Enter a query above.*"))
 
-        try:
-            _cur = local_conn.execute(_query)
-            _cols = [desc[0] for desc in _cur.description]
-            _rows = _cur.fetchall()
-            _data = [dict(zip(_cols, row)) for row in _rows]
-            sql_result = mo.ui.table(_data, selection=None) if _data else mo.md("*Query returned no rows.*")
-        except Exception as e:
-            sql_result = mo.callout(mo.md(f"`{e}`"), kind="danger")
+    try:
+        _cur = local_conn.execute(_query)
+        _cols = [desc[0] for desc in _cur.description]
+        _rows = _cur.fetchall()
+        _data = [dict(zip(_cols, row)) for row in _rows]
+        sql_result = mo.ui.table(_data, selection=None) if _data else mo.md("*Query returned no rows.*")
+    except Exception as e:
+        sql_result = mo.callout(mo.md(f"`{e}`"), kind="danger")
 
-        sql_result
+    sql_result
     return
 
 

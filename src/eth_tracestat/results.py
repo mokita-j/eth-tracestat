@@ -15,7 +15,12 @@ class ResultsDB:
         self.conn.executescript("""
             CREATE TABLE IF NOT EXISTS blocks (
                 block_num    INTEGER PRIMARY KEY,
-                n_txs        INTEGER NOT NULL
+                n_txs        INTEGER NOT NULL,
+                gas_used     INTEGER,
+                gas_limit    INTEGER,
+                miner        TEXT,
+                base_fee     INTEGER,
+                timestamp    INTEGER
             );
 
             CREATE TABLE IF NOT EXISTS storage_ops (
@@ -41,6 +46,15 @@ class ResultsDB:
             CREATE INDEX IF NOT EXISTS idx_calls_address ON calls(address);
             CREATE INDEX IF NOT EXISTS idx_calls_block ON calls(block_num);
         """)
+        # Migrate existing blocks table (add missing columns)
+        existing_cols = {row[1] for row in self.conn.execute("PRAGMA table_info(blocks)")}
+        for col, coltype in [
+            ("gas_used", "INTEGER"), ("gas_limit", "INTEGER"),
+            ("miner", "TEXT"), ("base_fee", "INTEGER"), ("timestamp", "INTEGER"),
+        ]:
+            if col not in existing_cols:
+                self.conn.execute(f"ALTER TABLE blocks ADD COLUMN {col} {coltype}")
+        self.conn.commit()
 
     def has_block(self, block_num: int) -> bool:
         row = self.conn.execute(
@@ -50,8 +64,11 @@ class ResultsDB:
 
     def store_block_counts(self, counts: BlockCounts) -> None:
         self.conn.execute(
-            "INSERT OR REPLACE INTO blocks (block_num, n_txs) VALUES (?, ?)",
-            (counts.block_num, counts.n_txs),
+            "INSERT OR REPLACE INTO blocks "
+            "(block_num, n_txs, gas_used, gas_limit, miner, base_fee, timestamp) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (counts.block_num, counts.n_txs, counts.gas_used, counts.gas_limit,
+             counts.miner, counts.base_fee, counts.timestamp),
         )
 
         # Delete existing rows for this block (idempotent re-analysis)
