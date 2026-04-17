@@ -4,12 +4,14 @@ import argparse
 import json
 import sys
 
+import requests
+
 try:
     from tqdm import tqdm
 except ImportError:
     tqdm = None
 
-from .rpc import rpc, latest_block
+from .rpc import rpc, rpc_batch, latest_block
 from .trace_processor import process_block_traces
 from .aggregate import summarize_block
 from .text_report import print_result, print_summary
@@ -72,16 +74,24 @@ def resolve_blocks(args, cache: TraceCache | None = None) -> list[int]:
 
 def fetch_block(url: str, block_num: int) -> tuple[dict, list]:
     block_data = rpc(url, "eth_getBlockByNumber", [hex(block_num), True])
-    traces = rpc(
-        url,
-        "debug_traceBlockByNumber",
-        [hex(block_num), {
-            "disableMemory": True,
-            "disableReturnData": True,
-            "disableStack": False,
-        }],
-        timeout=600,
-    )
+    trace_opts = {
+        "disableMemory": True,
+        "disableReturnData": True,
+        "disableStack": False,
+    }
+    try:
+        traces = rpc(url, "debug_traceBlockByNumber",
+                      [hex(block_num), trace_opts], timeout=600)
+    except requests.exceptions.ChunkedEncodingError:
+        # Block trace too large — fall back to per-transaction tracing
+        tx_hashes = [tx["hash"] for tx in block_data.get("transactions", [])]
+        print(f"\n  Block {block_num}: block trace too large, "
+              f"falling back to per-tx tracing ({len(tx_hashes)} txs)",
+              file=sys.stderr)
+        traces = []
+        for tx_hash in tx_hashes:
+            trace = rpc(url, "debug_traceTransaction", [tx_hash, trace_opts], timeout=600)
+            traces.append(trace)
     return block_data, traces
 
 
@@ -139,7 +149,7 @@ def main():
             results.append(summary)
             print_result(summary)
         except Exception as e:
-            print(f"\n  Block {bn}: FAILED — {e}", file=sys.stderr)
+            print(f"\n  Block {bn}: FAILED — {type(e).__name__}: {e}", file=sys.stderr)
 
     print_summary(results)
 

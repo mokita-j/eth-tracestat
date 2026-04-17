@@ -46,7 +46,7 @@ with open('app_wasm.py', 'w') as f:
 "
 
 echo "Exporting Marimo app to WASM..."
-marimo export html-wasm app_wasm.py -o docs/index.html --mode run
+marimo export html-wasm app_wasm.py -o docs/index.html --mode run --no-sandbox
 rm app_wasm.py
 
 echo "Patching HTML metadata..."
