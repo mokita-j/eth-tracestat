@@ -379,7 +379,7 @@ def _(block_from, block_to, go, is_local, local_conn, mo, np, static_data):
             _rows = local_conn.execute(_sql, [_bmin, _bmax]).fetchall()
             _extra_val = local_conn.execute(
                 f"SELECT MAX(cnt) FROM (SELECT COUNT(DISTINCT "
-                f"{'address || chr(124) || slot' if 's' in _key else 'address'}"
+                f"{'address || CHAR(124) || slot' if 's' in _key else 'address'}"
                 f") AS cnt FROM {'storage_ops' if 's' in _key else 'calls'}"
                 f" WHERE block_num BETWEEN ? AND ?"
                 f" GROUP BY {'block_num' if 'b' in _key else 'block_num, tx_idx'})",
@@ -503,70 +503,69 @@ def _(is_local, local_conn, mo):
         marimo run app.py
         ```
         """)
-        return
+        sql_input = None
+        run_button = None
+    else:
+        mo.md("""
+        ## <a id="sql-explorer" href="#sql-explorer" class="anchor-link">SQL explorer</a>
 
-    mo.md("""
-    ## <a id="sql-explorer" href="#sql-explorer" class="anchor-link">SQL explorer</a>
+        <p class="section-desc">
+        Write custom SQL queries against the raw trace data.
+        Use this to answer questions the charts above don't cover —
+        filter by address, find the heaviest transactions, compare read/write ratios, etc.
+        </p>
+        """)
 
-    <p class="section-desc">
-    Write custom SQL queries against the raw trace data.
-    Use this to answer questions the charts above don't cover —
-    filter by address, find the heaviest transactions, compare read/write ratios, etc.
-    </p>
-    """)
+        sql_input = mo.ui.text_area(
+            value="SELECT address,\n"
+                  "       SUM(sload_count + sstore_count) AS total_ops,\n"
+                  "       SUM(sload_count) AS reads,\n"
+                  "       SUM(sstore_count) AS writes\n"
+                  "FROM storage_ops\n"
+                  "GROUP BY address\n"
+                  "ORDER BY total_ops DESC\n"
+                  "LIMIT 20",
+            rows=20,
+            full_width=True,
+        )
+        run_button = mo.ui.run_button(label="Run query")
 
-    sql_input = mo.ui.text_area(
-        value="SELECT address,\n"
-              "       SUM(sload_count + sstore_count) AS total_ops,\n"
-              "       SUM(sload_count) AS reads,\n"
-              "       SUM(sstore_count) AS writes\n"
-              "FROM storage_ops\n"
-              "GROUP BY address\n"
-              "ORDER BY total_ops DESC\n"
-              "LIMIT 20",
-        rows=20,
-        full_width=True,
-    )
-    run_button = mo.ui.run_button(label="Run query")
+        _schema_data = [
+            {"table": "blocks", "column": "block_num", "type": "INT (PK)"},
+            {"table": "", "column": "n_txs", "type": "INT"},
+            {"table": "storage_ops", "column": "block_num", "type": "INT"},
+            {"table": "", "column": "tx_idx", "type": "INT"},
+            {"table": "", "column": "address", "type": "TEXT"},
+            {"table": "", "column": "slot", "type": "TEXT"},
+            {"table": "", "column": "sload_count", "type": "INT"},
+            {"table": "", "column": "sstore_count", "type": "INT"},
+            {"table": "calls", "column": "block_num", "type": "INT"},
+            {"table": "", "column": "tx_idx", "type": "INT"},
+            {"table": "", "column": "address", "type": "TEXT"},
+            {"table": "", "column": "call_count", "type": "INT"},
+        ]
+        _schema = mo.vstack([
+            mo.md('<span class="section-label" style="background: #3b82f618; color: #3b82f6;">Database schema</span>'),
+            mo.ui.table(_schema_data, selection=None, pagination=False,
+                        show_column_summaries=False, show_data_types=False, show_download=False),
+        ], gap=0.3)
 
-    _schema_data = [
-        {"table": "blocks", "column": "block_num", "type": "INT (PK)"},
-        {"table": "", "column": "n_txs", "type": "INT"},
-        {"table": "storage_ops", "column": "block_num", "type": "INT"},
-        {"table": "", "column": "tx_idx", "type": "INT"},
-        {"table": "", "column": "address", "type": "TEXT"},
-        {"table": "", "column": "slot", "type": "TEXT"},
-        {"table": "", "column": "sload_count", "type": "INT"},
-        {"table": "", "column": "sstore_count", "type": "INT"},
-        {"table": "calls", "column": "block_num", "type": "INT"},
-        {"table": "", "column": "tx_idx", "type": "INT"},
-        {"table": "", "column": "address", "type": "TEXT"},
-        {"table": "", "column": "call_count", "type": "INT"},
-    ]
-    _schema = mo.vstack([
-        mo.md('<span class="section-label" style="background: #3b82f618; color: #3b82f6;">Database schema</span>'),
-        mo.ui.table(_schema_data, selection=None, pagination=False,
-                    show_column_summaries=False, show_data_types=False, show_download=False),
-    ], gap=0.3)
-
-    mo.hstack([
-        _schema,
-        mo.md(
-            '<div class="sql-col">'
-            '<span class="section-label" style="background: #3b82f618; color: #3b82f6; margin-bottom: 6px;">Custom query</span>'
-            f'{mo.as_html(sql_input).text}'
-            f'<div style="display:flex; justify-content:flex-start; margin-top: 6px;">{mo.as_html(run_button).text}</div>'
-            '</div>'
-        ),
-    ], widths=[1, 3], align="stretch")
+        mo.hstack([
+            _schema,
+            mo.md(
+                '<div class="sql-col">'
+                '<span class="section-label" style="background: #3b82f618; color: #3b82f6; margin-bottom: 6px;">Custom query</span>'
+                f'{mo.as_html(sql_input).text}'
+                f'<div style="display:flex; justify-content:flex-start; margin-top: 6px;">{mo.as_html(run_button).text}</div>'
+                '</div>'
+            ),
+        ], widths=[1, 3], align="stretch")
     return local_conn, run_button, sql_input
 
 
 @app.cell
 def _(is_local, local_conn, mo, run_button, sql_input):
-    if not is_local:
-        return
-
+    mo.stop(not is_local)
     mo.stop(not run_button.value)
 
     _query = sql_input.value.strip()
