@@ -500,11 +500,7 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
     if not is_local:
         _warm_data = static_data.get("warm_analysis", {}).get("per_block_warm", []) if static_data else []
     else:
-        from eth_tracestat.warm_analysis import per_block_warm as _pbw
-        import sqlite3 as _sql3
         _bmin_w, _bmax_w = block_from.value, block_to.value
-        _fconn = _sql3.connect("data/results.db")
-        _fconn.execute(f"ATTACH DATABASE 'data/results.db' AS r")
         _warm_data_raw = local_conn.execute("""
             SELECT
                 block_num,
@@ -1054,7 +1050,7 @@ def _(mo):
 @app.cell
 def _(is_local, local_conn, mo):
     if not is_local:
-        mo.md("""
+        _sql_content = mo.md("""
         ## <a id="sql-explorer" href="#sql-explorer" class="anchor-link">SQL explorer</a>
 
         <p class="section-desc">
@@ -1072,86 +1068,87 @@ def _(is_local, local_conn, mo):
         marimo run app.py
         ```
         """)
-        return
+        sql_input = None
+        run_button = None
+    else:
+        sql_input = mo.ui.text_area(
+            value="SELECT address,\n"
+                  "       SUM(sload_count + sstore_count) AS total_ops,\n"
+                  "       SUM(sload_count) AS reads,\n"
+                  "       SUM(sstore_count) AS writes\n"
+                  "FROM storage_ops\n"
+                  "GROUP BY address\n"
+                  "ORDER BY total_ops DESC\n"
+                  "LIMIT 20",
+            rows=20,
+            full_width=True,
+        )
+        run_button = mo.ui.run_button(label="Run query")
 
-    mo.md("""
-    ## <a id="sql-explorer" href="#sql-explorer" class="anchor-link">SQL explorer</a>
+        _schema_data = [
+            {"table": "blocks", "column": "block_num", "type": "INT (PK)"},
+            {"table": "", "column": "n_txs", "type": "INT"},
+            {"table": "storage_ops", "column": "block_num", "type": "INT"},
+            {"table": "", "column": "tx_idx", "type": "INT"},
+            {"table": "", "column": "address", "type": "TEXT"},
+            {"table": "", "column": "slot", "type": "TEXT"},
+            {"table": "", "column": "sload_count", "type": "INT"},
+            {"table": "", "column": "sstore_count", "type": "INT"},
+            {"table": "calls", "column": "block_num", "type": "INT"},
+            {"table": "", "column": "tx_idx", "type": "INT"},
+            {"table": "", "column": "address", "type": "TEXT"},
+            {"table": "", "column": "call_count", "type": "INT"},
+        ]
+        _schema = mo.vstack([
+            mo.md('<span class="section-label" style="background: #3b82f618; color: #3b82f6;">Database schema</span>'),
+            mo.ui.table(_schema_data, selection=None, pagination=False,
+                        show_column_summaries=False, show_data_types=False, show_download=False),
+        ], gap=0.3)
 
-    <p class="section-desc">
-    Write custom SQL queries against the raw trace data.
-    Use this to answer questions the charts above don't cover —
-    filter by address, find the heaviest transactions, compare read/write ratios, etc.
-    </p>
-    """)
+        _sql_content = mo.vstack([
+            mo.md("""
+            ## <a id="sql-explorer" href="#sql-explorer" class="anchor-link">SQL explorer</a>
 
-    sql_input = mo.ui.text_area(
-        value="SELECT address,\n"
-              "       SUM(sload_count + sstore_count) AS total_ops,\n"
-              "       SUM(sload_count) AS reads,\n"
-              "       SUM(sstore_count) AS writes\n"
-              "FROM storage_ops\n"
-              "GROUP BY address\n"
-              "ORDER BY total_ops DESC\n"
-              "LIMIT 20",
-        rows=20,
-        full_width=True,
-    )
-    run_button = mo.ui.run_button(label="Run query")
-
-    _schema_data = [
-        {"table": "blocks", "column": "block_num", "type": "INT (PK)"},
-        {"table": "", "column": "n_txs", "type": "INT"},
-        {"table": "storage_ops", "column": "block_num", "type": "INT"},
-        {"table": "", "column": "tx_idx", "type": "INT"},
-        {"table": "", "column": "address", "type": "TEXT"},
-        {"table": "", "column": "slot", "type": "TEXT"},
-        {"table": "", "column": "sload_count", "type": "INT"},
-        {"table": "", "column": "sstore_count", "type": "INT"},
-        {"table": "calls", "column": "block_num", "type": "INT"},
-        {"table": "", "column": "tx_idx", "type": "INT"},
-        {"table": "", "column": "address", "type": "TEXT"},
-        {"table": "", "column": "call_count", "type": "INT"},
-    ]
-    _schema = mo.vstack([
-        mo.md('<span class="section-label" style="background: #3b82f618; color: #3b82f6;">Database schema</span>'),
-        mo.ui.table(_schema_data, selection=None, pagination=False,
-                    show_column_summaries=False, show_data_types=False, show_download=False),
-    ], gap=0.3)
-
-    mo.hstack([
-        _schema,
-        mo.md(
-            '<div class="sql-col">'
-            '<span class="section-label" style="background: #3b82f618; color: #3b82f6; margin-bottom: 6px;">Custom query</span>'
-            f'{mo.as_html(sql_input).text}'
-            f'<div style="display:flex; justify-content:flex-start; margin-top: 6px;">{mo.as_html(run_button).text}</div>'
-            '</div>'
-        ),
-    ], widths=[1, 3], align="stretch")
+            <p class="section-desc">
+            Write custom SQL queries against the raw trace data.
+            Use this to answer questions the charts above don't cover —
+            filter by address, find the heaviest transactions, compare read/write ratios, etc.
+            </p>
+            """),
+            mo.hstack([
+                _schema,
+                mo.md(
+                    '<div class="sql-col">'
+                    '<span class="section-label" style="background: #3b82f618; color: #3b82f6; margin-bottom: 6px;">Custom query</span>'
+                    f'{mo.as_html(sql_input).text}'
+                    f'<div style="display:flex; justify-content:flex-start; margin-top: 6px;">{mo.as_html(run_button).text}</div>'
+                    '</div>'
+                ),
+            ], widths=[1, 3], align="stretch"),
+        ])
+    _sql_content
     return local_conn, run_button, sql_input
 
 
 @app.cell
 def _(is_local, local_conn, mo, run_button, sql_input):
-    if not is_local:
-        return
+    if is_local:
+        mo.stop(not run_button.value)
 
-    mo.stop(not run_button.value)
+        _query = sql_input.value.strip()
+        if not _query:
+            mo.stop(True, mo.md("*Enter a query above.*"))
 
-    _query = sql_input.value.strip()
-    if not _query:
-        mo.stop(True, mo.md("*Enter a query above.*"))
+        try:
+            _cur = local_conn.execute(_query)
+            _cols = [desc[0] for desc in _cur.description]
+            _rows = _cur.fetchall()
+            _data = [dict(zip(_cols, row)) for row in _rows]
+            sql_result = mo.ui.table(_data, selection=None) if _data else mo.md("*Query returned no rows.*")
+        except Exception as e:
+            sql_result = mo.callout(mo.md(f"`{e}`"), kind="danger")
 
-    try:
-        _cur = local_conn.execute(_query)
-        _cols = [desc[0] for desc in _cur.description]
-        _rows = _cur.fetchall()
-        _data = [dict(zip(_cols, row)) for row in _rows]
-        sql_result = mo.ui.table(_data, selection=None) if _data else mo.md("*Query returned no rows.*")
-    except Exception as e:
-        sql_result = mo.callout(mo.md(f"`{e}`"), kind="danger")
-
-    sql_result
+        sql_result
     return
 
 
