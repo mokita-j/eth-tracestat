@@ -1555,45 +1555,12 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
             'disproportionate share of all reuse in a typical block.'
             '</p>'
         )
-        # Clickable ranking table — plotly can't make y-axis labels clickable,
-        # so show the addresses with Etherscan links in an accompanying table.
-        _table_rows = "".join(
-            f'<tr>'
-            f'<td style="text-align: right; color: #94a3b8; font-variant-numeric: tabular-nums;">{i + 1}</td>'
-            f'<td><a href="https://etherscan.io/address/{d["address"]}" target="_blank" rel="noopener" '
-            f'style="color: #3b82f6; text-decoration: none; font-family: JetBrains Mono, monospace;">'
-            f'{d["address"]}</a></td>'
-            f'<td style="text-align: right; font-variant-numeric: tabular-nums;">{d["warm_accesses"]:,}</td>'
-            f'<td style="text-align: right; font-variant-numeric: tabular-nums;">{d["total_accesses"]:,}</td>'
-            f'<td style="text-align: right; font-variant-numeric: tabular-nums;">{d["blocks_present"]}</td>'
-            f'</tr>'
-            for i, d in enumerate(_top)
-        )
-        _contracts_table = mo.md(
-            f'<div style="max-width: 960px; font-size: 0.85rem;">'
-            f'<table style="border-collapse: collapse; width: 100%;">'
-            f'<thead><tr style="border-bottom: 1px solid #e2e8f0;">'
-            f'<th style="text-align: right; padding: 6px 10px; color: #94a3b8; font-weight: 600; font-size: 0.72rem; text-transform: uppercase;">#</th>'
-            f'<th style="text-align: left; padding: 6px 10px; color: #94a3b8; font-weight: 600; font-size: 0.72rem; text-transform: uppercase;">Contract ↗</th>'
-            f'<th style="text-align: right; padding: 6px 10px; color: #94a3b8; font-weight: 600; font-size: 0.72rem; text-transform: uppercase;">Warm accesses</th>'
-            f'<th style="text-align: right; padding: 6px 10px; color: #94a3b8; font-weight: 600; font-size: 0.72rem; text-transform: uppercase;">Total accesses</th>'
-            f'<th style="text-align: right; padding: 6px 10px; color: #94a3b8; font-weight: 600; font-size: 0.72rem; text-transform: uppercase;">Blocks present</th>'
-            f'</tr></thead>'
-            f'<tbody>{_table_rows}</tbody>'
-            f'</table>'
-            f'<p style="font-size: 0.75rem; color: #94a3b8; margin-top: 8px;">'
-            f'Addresses link to Etherscan for inspection.'
-            f'</p>'
-            f'</div>'
-        )
-
         _phase4_out = mo.vstack([
             _stats4,
             _phase4_interp,
             mo.vstack([
                 mo.md('<span class="section-label" style="background: #3b82f618; color: #3b82f6;">Top contracts by warm access contribution</span>'),
                 mo.ui.plotly(_fig_bar),
-                _contracts_table,
             ]),
             mo.vstack([
                 mo.md('<span class="section-label" style="background: #3b82f618; color: #3b82f6;">Warm access share — top 5 / top 10 / rest</span>'),
