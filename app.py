@@ -290,6 +290,61 @@ def _(is_local, local_conn, mo, static_data):
 
 @app.cell
 def _(mo):
+    mo.accordion({
+        "📖 Glossary — click to expand": mo.md("""
+        <div style="font-size: 0.9rem; line-height: 1.65; color: #334155; max-width: 820px;">
+
+        **Two reuse levels:**
+
+        | | |
+        |---|---|
+        | **Slot access** | An SLOAD or SSTORE opcode targeting a specific `(address, slot)` pair. |
+        | **Account access** | A CALL / STATICCALL / DELEGATECALL / CALLCODE opcode targeting a contract address. |
+
+        **Three access states (per access):**
+
+        | | |
+        |---|---|
+        | **Cold** | The first time this access target was touched in the block. One per unique target per block. |
+        | **Within-tx warm** | A repeat access to the same target inside the same transaction. Any execution engine with opcode-level caching already exploits this. |
+        | **Cross-tx warm** | A first-in-tx access to a target that an earlier transaction in the same block already touched. Exploiting these requires <b>block-scoped caching</b>. |
+
+        **Identity:** every access is exactly one of the three. `cold + within + cross = T`.
+
+        **Counting symbols used throughout:**
+
+        | | |
+        |---|---|
+        | `T` | Total accesses in the block (sum of all access ops). |
+        | `U_tx` | Unique `(tx_idx, target)` tuples in the block — i.e., each tx × target combination counted once. |
+        | `U_block` | Unique targets in the block regardless of tx — each `(address, slot)` pair counted once, or each address counted once for the account metric. |
+
+        From which every metric falls out:
+
+        | | |
+        |---|---|
+        | **Warm rate** | `(T − U_block) / T` |
+        | **Within-tx rate** | `(T − U_tx) / T` |
+        | **Cross-tx rate** | `(U_tx − U_block) / T` |
+
+        **Stratified estimators:** 1,224 blocks sampled across <b>36 strata</b> (12 time segments × 3 gas terciles). Each stratum weighted 1/36.
+
+        | | |
+        |---|---|
+        | `ȳₕ` | Mean of the metric over blocks in stratum h. |
+        | **Stratified mean** | `ȳ_str = Σₕ wₕ · ȳₕ` with `wₕ = 1/36`. |
+        | **SE (standard error)** | `√(Σₕ wₕ² · SEMₕ²)` where `SEMₕ = sₕ/√nₕ`. |
+        | **95% CI** | `ȳ_str ± 1.96 · SE`. |
+        | **Naive mean** | Simple unweighted average across sampled blocks (shown for comparison — if sample is balanced, it equals the stratified mean). |
+
+        </div>
+        """)
+    }, lazy=False)
+    return
+
+
+@app.cell
+def _(mo):
     mo.md("""
     ## <a id="warm-rate" href="#warm-rate" class="anchor-link">How often is storage reused?</a>
 
@@ -299,6 +354,13 @@ def _(mo):
     operations that hit a previously-touched slot. This is the headline observation — how much
     of a block's storage traffic is pure reuse.
     </p>
+
+    <div style="background: #f1f5f9; border-left: 3px solid #3b82f6; padding: 10px 14px; margin: 8px 0 16px 0; max-width: 680px; font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; color: #334155;">
+      <b style="color: #1e293b; font-family: Inter, sans-serif; font-weight: 600;">How it's computed</b><br>
+      warm&nbsp;rate = (T − U_block) / T<br>
+      • <code>T</code> = total SLOAD + SSTORE ops in the block<br>
+      • <code>U_block</code> = unique <code>(address, slot)</code> pairs touched in the block
+    </div>
     """)
     return
 
@@ -415,6 +477,15 @@ def _(mo):
     <b>Within-tx reuse</b> — repeat access to a slot already touched earlier <i>in the same transaction</i>. Any runtime with execution-scoped caching already exploits this.<br>
     <b>Cross-tx reuse</b> — first access in a transaction to a slot already touched by an <i>earlier transaction</i> in the same block. Exploiting this requires <i>block-scoped</i> caching — state kept hot across transaction boundaries within a block. This is the quantified opportunity for block-level storage caching, runtime-independent.
     </p>
+
+    <div style="background: #f1f5f9; border-left: 3px solid #f59e0b; padding: 10px 14px; margin: 8px 0 16px 0; max-width: 680px; font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; color: #334155;">
+      <b style="color: #1e293b; font-family: Inter, sans-serif; font-weight: 600;">How it's computed</b><br>
+      within&nbsp;= T − U_tx     &nbsp;&nbsp;&nbsp;(repeat accesses inside one tx)<br>
+      cross&nbsp;&nbsp;= U_tx − U_block (first-in-tx but slot already touched by earlier tx)<br>
+      cold&nbsp;&nbsp;&nbsp;= U_block     &nbsp;&nbsp;&nbsp;(genuinely first touch in block)<br>
+      • <code>U_tx</code> = unique <code>(tx_idx, address, slot)</code> triples — each tx × slot combination counted once<br>
+      • Identity: <code>cold + within + cross = T</code>
+    </div>
     """)
     return
 
@@ -793,6 +864,17 @@ def _(mo):
     <br>• Does reuse drift over the year? (mean warm rate per time segment)
     <br>The 12×3 heatmap at the bottom shows the full per-stratum picture.
     </p>
+
+    <div style="background: #f1f5f9; border-left: 3px solid #ef4444; padding: 10px 14px; margin: 8px 0 16px 0; max-width: 680px; font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; color: #334155;">
+      <b style="color: #1e293b; font-family: Inter, sans-serif; font-weight: 600;">How the population estimate is computed</b><br>
+      Stratified mean:&nbsp;ȳ_str = Σₕ wₕ · ȳₕ  with wₕ = 1/36<br>
+      Standard error:&nbsp;&nbsp;&nbsp;SE(ȳ_str) = √(Σₕ wₕ² · (sₕ² / nₕ))<br>
+      95% CI:&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ȳ_str ± 1.96 · SE<br>
+      • <code>ȳₕ</code> = mean warm rate over blocks sampled in stratum h<br>
+      • <code>sₕ</code> = sample std of warm rate in stratum h;&nbsp; <code>nₕ</code> = # blocks in stratum h<br>
+      • Each stratum weighted equally at 1/36 because the NTILE sampling design<br>
+      &nbsp;&nbsp;ensures each covers ~1/36 of the full population.
+    </div>
     """)
     return
 
@@ -1087,6 +1169,14 @@ def _(mo):
     are accessed exactly once, twice, 3–5 times, etc. (pooled across all blocks). A power-law shape means
     a block-level cache with even modest capacity would capture most of the reuse.
     </p>
+
+    <div style="background: #f1f5f9; border-left: 3px solid #8b5cf6; padding: 10px 14px; margin: 8px 0 16px 0; max-width: 680px; font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; color: #334155;">
+      <b style="color: #1e293b; font-family: Inter, sans-serif; font-weight: 600;">How it's computed</b><br>
+      unique&nbsp;slot&nbsp;ratio = U_block / T<br>
+      top-N share = (accesses to the N hottest (address, slot) pairs) / T<br>
+      • Frequency bucket = number of accesses per <code>(block, address, slot)</code> tuple,<br>
+      &nbsp;&nbsp;pooled across all blocks, log-scaled.
+    </div>
     """)
     return
 
@@ -1307,6 +1397,15 @@ def _(mo):
     <b>reuse volume</b> = total accesses − unique (address, slot) pairs, summed across all blocks in the sample.
     The concentration here tells you which workloads a block-level cache would disproportionately benefit.
     </p>
+
+    <div style="background: #f1f5f9; border-left: 3px solid #10b981; padding: 10px 14px; margin: 8px 0 16px 0; max-width: 680px; font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; color: #334155;">
+      <b style="color: #1e293b; font-family: Inter, sans-serif; font-weight: 600;">How it's computed</b><br>
+      reuse&nbsp;volume(contract) = Σ_blocks (T_addr − U_block_addr)<br>
+      • <code>T_addr</code> = SLOAD + SSTORE ops targeting this contract, in one block<br>
+      • <code>U_block_addr</code> = unique slots of this contract touched in that block<br>
+      • Sum runs across every block in the sample where the contract appears.<br>
+      Note: this collapses within-tx and cross-tx warm into one number.
+    </div>
     """)
     return
 
@@ -1479,6 +1578,110 @@ def _(mo):
     narrative draws from this material.
     </p>
     """)
+
+    mo.accordion({
+        "Sampling design": mo.md("""
+        <div style="font-size: 0.9rem; line-height: 1.6; color: #334155; max-width: 820px;">
+
+        **Design:** stratified random sampling over a ~2.7M-block population (Ethereum mainnet, April 2025 → April 2026). 12 time segments × 3 gas terciles = 36 strata. 34 blocks drawn uniformly at random from each stratum → <b>1,224 blocks total</b>.
+
+        **Stratum boundaries (SQL):**
+        ```sql
+        WITH base AS (
+            SELECT number, time, gas_used, base_fee_per_gas,
+                   NTILE(12) OVER (ORDER BY number) AS segment
+            FROM ethereum.blocks
+            WHERE number BETWEEN 22200000 AND 24900000
+        ),
+        terciled AS (
+            SELECT *,
+                   NTILE(3) OVER (PARTITION BY segment ORDER BY gas_used) AS gas_tercile
+            FROM base
+        )
+        SELECT * FROM terciled WHERE rn <= 34
+        ```
+
+        **Why stratified:** time segments balance the sample across the year (avoid over-weighting any one month's workload); gas terciles balance across block utilization levels (avoid over-weighting quiet/busy regimes). Every stratum carries equal weight (1/36) in the population estimator.
+
+        **Filtering:** each sampled block is mapped to its fixed `(segment, gas_tercile)` label from the CSV. Any blocks in the DB that aren't in the sample (e.g., from an earlier consecutive-block census) are excluded from every aggregate, so published numbers reflect only the stratified design.
+
+        </div>
+        """),
+        "Warm-rate decomposition identity": mo.md("""
+        <div style="font-size: 0.9rem; line-height: 1.6; color: #334155; max-width: 820px;">
+
+        Per block, define:
+
+        | | |
+        |---|---|
+        | `T` | Total accesses (e.g., SLOAD+SSTORE for the slot metric). |
+        | `U_tx` | Unique `(tx_idx, address, slot)` rows in the trace — each tx × slot combo counted once. |
+        | `U_block` | Unique `(address, slot)` pairs in the block — each slot counted once regardless of tx. |
+
+        Every access falls into exactly one of three buckets:
+
+        | | | |
+        |---|---|---|
+        | **Cold** | `U_block` | First touch of the slot in the block. |
+        | **Within-tx warm** | `T − U_tx` | Repeats inside a single tx (each row contributes `k−1` where `k` = that tx's access count to the slot). |
+        | **Cross-tx warm** | `U_tx − U_block` | First-in-tx access, but the slot was touched by an earlier tx in the same block. |
+
+        Identity: `cold + within + cross = U_block + (T − U_tx) + (U_tx − U_block) = T` ✓
+
+        **Worked example.** Slot S accessed by three txs in the same block, with per-tx counts `{3, 2, 4}`:
+
+        - Tx 1: 1 cold + 2 within
+        - Tx 2: 1 cross + 1 within
+        - Tx 3: 1 cross + 3 within
+        - Totals: `T=9, U_tx=3, U_block=1` → cold=1, within=6, cross=2 (✓ sums to 9)
+
+        **Account domain** uses the same identity, swapping `storage_ops` for the `calls` table and `(address, slot)` for just `address`.
+
+        </div>
+        """),
+        "Stratified estimator": mo.md("""
+        <div style="font-size: 0.9rem; line-height: 1.6; color: #334155; max-width: 820px;">
+
+        For any per-block metric `y` (e.g., warm rate), the stratified population mean is:
+
+        ```
+        ȳ_str = Σ_h w_h · ȳ_h,   w_h = 1/36
+        ```
+
+        where `ȳ_h` is the simple mean of `y` across the `n_h` blocks sampled in stratum `h`. Since the NTILE-based design gives each stratum approximately equal population share `N_h/N ≈ 1/36`, equal weights are the unbiased estimator.
+
+        The standard error is the square-root of the sum of weighted within-stratum variances:
+
+        ```
+        SE(ȳ_str) = √( Σ_h w_h² · (s_h² / n_h) )
+        ```
+
+        where `s_h² = sample variance of y within stratum h` and `n_h = # blocks sampled`. (The finite-population correction `1 − n_h/N_h` is negligible at `n_h ≈ 34` out of ~75k blocks per stratum, so it's dropped.)
+
+        **95% CI:** `ȳ_str ± 1.96 · SE`.
+
+        **Why compare to the naive mean:** the naive mean weights every sampled block equally rather than every stratum. If the stratified and naive means are close, it confirms the sample is balanced — the strata don't have wildly different per-stratum means relative to their weights.
+
+        </div>
+        """),
+        "Counting caveats worth noting": mo.md("""
+        <div style="font-size: 0.9rem; line-height: 1.6; color: #334155; max-width: 820px;">
+
+        **Reverts.** `debug_traceBlockByNumber` records every opcode executed, including those in reverted transactions/calls. Warm counts are therefore slightly inflated — a reverted SLOAD still shows up. The effect is small in aggregate (reverts are a few % of gas) but not zero.
+
+        **Proxy/implementation pairs.** Every `DELEGATECALL` targets an implementation contract whose address is added to the account-access list (per EIP-2929). So calling a proxy counts once under the proxy address and once under its implementation. This inflates raw account totals by ~15–30% in DeFi-heavy txs but is semantically correct for access-list semantics. If your use-case is about code-hash-based caching (not address-based), de-duplicating proxy/impl pairs would be a different metric.
+
+        **Hot-tail effect.** A few transactions per block do thousands of repeat slot accesses (typically solver/aggregator loops). These dominate per-block totals. `within-tx` rates in particular are pulled upward by this tail — representative of real workload but not of a "median" transaction.
+
+        **Storage context.** `SLOAD` and `SSTORE` are attributed to the contract whose *storage* is being read/written — i.e., `DELEGATECALL`/`CALLCODE` inherit the caller's storage context correctly. The tracer maintains an explicit storage stack.
+
+        **Precompiles** (addresses `0x01`–`0x0a`) are excluded from account distributions. They're pre-warmed by protocol and don't participate in reuse dynamics.
+
+        **Contract creations** (tx.to = null) get a synthetic pseudo-address like `0xcreate_tx{i}` so their internal storage touches attribute correctly, but these pseudo-addresses never collide across blocks and always count as cold.
+
+        </div>
+        """),
+    }, lazy=False, multiple=True)
     return
 
 
