@@ -465,26 +465,34 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
         )
 
         _fig2 = _go3.Figure()
-        _fig2.add_trace(_go3.Bar(
-            name="Within-tx warm (EIP-2929)",
-            x=_blk_labels, y=_within_vals,
-            marker_color="#3b82f6",
+        _x_idx = list(range(1, len(_blk_labels) + 1))
+        _fig2.add_trace(_go3.Scatter(
+            name="Within-tx reuse",
+            x=_x_idx, y=_within_vals,
+            mode="lines", stackgroup="warm",
+            line=dict(width=0, color="#3b82f6"),
+            fillcolor="rgba(59, 130, 246, 0.75)",
+            hovertemplate="Rank %{x}<br>Within-tx: %{y:.3f}<extra></extra>",
         ))
-        _fig2.add_trace(_go3.Bar(
+        _fig2.add_trace(_go3.Scatter(
             name="Cross-tx reuse (block-cache opportunity)",
-            x=_blk_labels, y=_cross_vals,
-            marker_color="#f59e0b",
+            x=_x_idx, y=_cross_vals,
+            mode="lines", stackgroup="warm",
+            line=dict(width=0, color="#f59e0b"),
+            fillcolor="rgba(245, 158, 11, 0.75)",
+            hovertemplate="Rank %{x}<br>Cross-tx: %{y:.3f}<extra></extra>",
         ))
         _fig2.update_layout(
-            barmode="stack",
-            xaxis_title="Block (sorted by total warm rate ↑)",
+            xaxis_title="Block rank (sorted by total warm rate ↑)",
             yaxis_title="Share of storage accesses",
-            xaxis=dict(showticklabels=False),
+            xaxis=dict(showticklabels=True, showgrid=False),
+            yaxis=dict(range=[0, 1]),
             template="plotly_white",
             font=dict(family="Inter, system-ui, sans-serif", size=12, color="#475569"),
-            height=300, margin=dict(l=60, r=60, t=10, b=44),
+            height=320, margin=dict(l=60, r=60, t=10, b=44),
             plot_bgcolor="white", paper_bgcolor="white",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            hovermode="x unified",
         )
 
         # --- Companion panel: account-level decomposition ---------------------
@@ -522,26 +530,34 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
             _a_total_mean  = _a_within_mean + _a_cross_mean
 
             _fig2_acct = _go3.Figure()
-            _fig2_acct.add_trace(_go3.Bar(
+            _x_idx_a = list(range(1, len(_a_labels) + 1))
+            _fig2_acct.add_trace(_go3.Scatter(
                 name="Within-tx reuse (account)",
-                x=_a_labels, y=_a_within,
-                marker_color="#8b5cf6",
+                x=_x_idx_a, y=_a_within,
+                mode="lines", stackgroup="warm_acct",
+                line=dict(width=0, color="#8b5cf6"),
+                fillcolor="rgba(139, 92, 246, 0.75)",
+                hovertemplate="Rank %{x}<br>Within-tx: %{y:.3f}<extra></extra>",
             ))
-            _fig2_acct.add_trace(_go3.Bar(
+            _fig2_acct.add_trace(_go3.Scatter(
                 name="Cross-tx reuse (account)",
-                x=_a_labels, y=_a_cross,
-                marker_color="#ef4444",
+                x=_x_idx_a, y=_a_cross,
+                mode="lines", stackgroup="warm_acct",
+                line=dict(width=0, color="#ef4444"),
+                fillcolor="rgba(239, 68, 68, 0.75)",
+                hovertemplate="Rank %{x}<br>Cross-tx: %{y:.3f}<extra></extra>",
             ))
             _fig2_acct.update_layout(
-                barmode="stack",
-                xaxis_title="Block (sorted by account warm rate ↑)",
+                xaxis_title="Block rank (sorted by account warm rate ↑)",
                 yaxis_title="Share of account calls",
-                xaxis=dict(showticklabels=False),
+                xaxis=dict(showticklabels=True, showgrid=False),
+                yaxis=dict(range=[0, 1]),
                 template="plotly_white",
                 font=dict(family="Inter, system-ui, sans-serif", size=12, color="#475569"),
-                height=260, margin=dict(l=60, r=60, t=10, b=44),
+                height=280, margin=dict(l=60, r=60, t=10, b=44),
                 plot_bgcolor="white", paper_bgcolor="white",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                hovermode="x unified",
             )
 
             _stats2_acct = mo.md(
