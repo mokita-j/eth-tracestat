@@ -45,6 +45,8 @@ def parse_args():
                    help="Write HTML report with charts")
     p.add_argument("--warm-report", metavar="DB",
                    help="Print warm-rate summary stats from a results.db and exit")
+    p.add_argument("--strat-report", metavar="DB",
+                   help="Print stratified warm-rate summary (12×3 strata) and exit")
     return p.parse_args()
 
 
@@ -161,11 +163,63 @@ def _print_warm_report(db_path: str) -> None:
     conn.close()
 
 
+def _print_strat_report(db_path: str) -> None:
+    import sqlite3
+    from .stratification import stratified_mean, per_stratum_stats
+
+    conn = sqlite3.connect(db_path)
+    n_with_gas = conn.execute(
+        "SELECT COUNT(*) FROM blocks WHERE gas_used IS NOT NULL"
+    ).fetchone()[0]
+    n_total = conn.execute("SELECT COUNT(*) FROM blocks").fetchone()[0]
+    if n_with_gas == 0:
+        print(f"No blocks with gas_used populated (out of {n_total}).", file=sys.stderr)
+        conn.close()
+        return
+
+    print(f"\n=== Stratified warm-rate report — {n_with_gas} blocks "
+          f"(of {n_total} total), 12 × 3 = 36 strata ===\n")
+
+    for metric in ("warm_rate", "within_rate", "cross_rate"):
+        r = stratified_mean(conn, metric)
+        if r["mean"] is None:
+            continue
+        print(f"  {metric:<12}  strat_mean={r['mean']:.4f}  SE={r['sem']:.4f}  "
+              f"95%CI=[{r['ci95_low']:.4f}, {r['ci95_high']:.4f}]  "
+              f"naive={r['naive_mean']:.4f}  Δ={r['mean'] - r['naive_mean']:+.4f}")
+
+    print(f"\n  Populated strata: {r['n_strata_populated']} / 36")
+
+    # Per-segment roll-up (averaging over terciles)
+    per = per_stratum_stats(conn, "warm_rate")
+    print("\n  Segment roll-up (mean of tercile means):")
+    for seg in range(1, 13):
+        rows = [p for p in per if p["segment"] == seg and p["n"] > 0]
+        if not rows:
+            print(f"    Seg {seg:>2}: (empty)")
+            continue
+        seg_mean = sum(p["mean"] for p in rows) / len(rows)
+        n_blocks = sum(p["n"] for p in rows)
+        tercile_means = [
+            f"{next((p['mean'] for p in rows if p['gas_tercile'] == t), float('nan')):.4f}"
+            for t in (1, 2, 3)
+        ]
+        print(f"    Seg {seg:>2}: mean={seg_mean:.4f}  "
+              f"terciles=[{', '.join(tercile_means)}]  "
+              f"n={n_blocks}")
+
+    conn.close()
+
+
 def main():
     args = parse_args()
 
     if args.warm_report:
         _print_warm_report(args.warm_report)
+        return
+
+    if args.strat_report:
+        _print_strat_report(args.strat_report)
         return
 
     # Open cache / results DB

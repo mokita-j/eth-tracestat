@@ -1066,6 +1066,288 @@ def _(mo):
 
 
 @app.cell
+def _(mo):
+    mo.md("""
+    ## <a id="stratification" href="#stratification" class="anchor-link">Phase 5 — Stratification</a>
+
+    <p class="section-desc">
+    Blocks were sampled by stratified random sampling: <b>12 time segments × 3 gas terciles = 36 strata</b>,
+    ~34 blocks per stratum. This section reconstructs that stratification from the loaded sample and
+    reports:
+    <br>• Stratified mean warm rate with proper standard error (weighting each stratum equally at 1/36).
+    <br>• A 12×3 heatmap of per-stratum mean warm rate — reveals patterns by time or gas load.
+    <br>• Grouped violins by gas tercile — answers "do busier blocks warm differently?"
+    </p>
+    """)
+    return
+
+
+@app.cell
+def _(block_from, block_to, is_local, local_conn, mo, static_data):
+    import math as _math
+    from collections import defaultdict as _dd5
+
+    if not is_local:
+        _strat_bundle = static_data.get("stratification", {}) if static_data else {}
+        _per_stratum = _strat_bundle.get("per_stratum", [])
+        _grid = _strat_bundle.get("grid", {})
+        _by_terc = _strat_bundle.get("by_tercile", {})
+        _mean_info = _strat_bundle.get("mean_info", {})
+    else:
+        _bmin5, _bmax5 = block_from.value, block_to.value
+
+        # Stratum assignment: NTILE(12) over block_num, NTILE(3) over gas_used per segment
+        _strata_rows = local_conn.execute("""
+            WITH seg AS (
+                SELECT block_num, gas_used, timestamp,
+                       NTILE(12) OVER (ORDER BY block_num) AS segment
+                FROM blocks
+                WHERE gas_used IS NOT NULL
+                  AND block_num BETWEEN ? AND ?
+            ),
+            terciled AS (
+                SELECT block_num, gas_used, timestamp, segment,
+                       NTILE(3) OVER (PARTITION BY segment ORDER BY gas_used) AS gas_tercile
+                FROM seg
+            )
+            SELECT block_num, segment, gas_tercile FROM terciled
+        """, [_bmin5, _bmax5]).fetchall()
+        _stratum_of = {r[0]: (r[1], r[2]) for r in _strata_rows}
+
+        # Warm rate per block
+        _warm_rows5 = local_conn.execute("""
+            SELECT block_num,
+                   SUM(sload_count + sstore_count) AS T,
+                   COUNT(*) AS U_tx,
+                   COUNT(DISTINCT address || '|' || slot) AS U_block
+            FROM storage_ops
+            WHERE block_num BETWEEN ? AND ?
+            GROUP BY block_num
+        """, [_bmin5, _bmax5]).fetchall()
+        _rate_of = {
+            r[0]: {
+                "warm_rate": (r[1] - r[3]) / r[1],
+                "within_rate": (r[1] - r[2]) / r[1],
+                "cross_rate": (r[2] - r[3]) / r[1],
+            }
+            for r in _warm_rows5 if r[1]
+        }
+
+        # Group by (segment, tercile)
+        _groups = _dd5(list)
+        for _bn, _srt in _stratum_of.items():
+            _r = _rate_of.get(_bn)
+            if _r is not None:
+                _groups[_srt].append(_r["warm_rate"])
+
+        # Per-stratum stats + grid
+        _per_stratum = []
+        _grid_z = [[None] * 3 for _ in range(12)]
+        _grid_n = [[0] * 3 for _ in range(12)]
+        for _seg in range(1, 13):
+            for _terc in range(1, 4):
+                _vals = _groups.get((_seg, _terc), [])
+                _n = len(_vals)
+                if _n > 0:
+                    _mean_s = sum(_vals) / _n
+                    if _n > 1:
+                        _var_s = sum((v - _mean_s) ** 2 for v in _vals) / (_n - 1)
+                        _std_s = _math.sqrt(_var_s)
+                        _sem_s = _std_s / _math.sqrt(_n)
+                    else:
+                        _std_s = 0.0
+                        _sem_s = 0.0
+                else:
+                    _mean_s = _std_s = _sem_s = None
+                _per_stratum.append({
+                    "segment": _seg, "gas_tercile": _terc,
+                    "n": _n, "mean": _mean_s, "std": _std_s, "sem": _sem_s,
+                })
+                _grid_z[_seg - 1][_terc - 1] = _mean_s
+                _grid_n[_seg - 1][_terc - 1] = _n
+
+        # Stratified mean with SE (equal weights 1/36)
+        _populated = [s for s in _per_stratum if s["n"] > 0]
+        _w = 1.0 / 36
+        if _populated:
+            _strat_mean = sum(_w * s["mean"] for s in _populated)
+            _strat_var = sum((_w ** 2) * (s["sem"] ** 2) for s in _populated)
+            _strat_sem = _math.sqrt(_strat_var)
+        else:
+            _strat_mean = _strat_sem = None
+
+        _all_vals = [r["warm_rate"] for r in _rate_of.values()]
+        _naive_mean = sum(_all_vals) / len(_all_vals) if _all_vals else None
+
+        _mean_info = {
+            "mean": _strat_mean, "sem": _strat_sem,
+            "ci95_low": _strat_mean - 1.96 * _strat_sem if _strat_mean is not None else None,
+            "ci95_high": _strat_mean + 1.96 * _strat_sem if _strat_mean is not None else None,
+            "naive_mean": _naive_mean,
+            "n_populated": len(_populated),
+            "n_blocks": len(_all_vals),
+        }
+
+        _grid = {
+            "z": _grid_z, "n": _grid_n,
+            "x_labels": ["Low gas", "Mid gas", "High gas"],
+            "y_labels": [f"Seg {i}" for i in range(1, 13)],
+        }
+
+        _by_terc = {"1": [], "2": [], "3": []}
+        for _srt, _vals in _groups.items():
+            _by_terc[str(_srt[1])].extend(_vals)
+
+    if not _per_stratum or _mean_info.get("mean") is None:
+        _phase5_out = mo.callout(
+            mo.md(
+                "**No stratification data.** "
+                "Ensure the `blocks` table has `gas_used` populated "
+                "(re-run the tracer on main after the `c41d8f7` schema update)."
+            ),
+            kind="warn",
+        )
+    else:
+        import plotly.graph_objects as _go6
+
+        def _sc6(label, value):
+            return (
+                f'<div style="flex: 1; min-width: 120px; background: #f8fafc; '
+                f'border-radius: 6px; padding: 8px 12px; text-align: center;">'
+                f'<div style="font-size: 0.7rem; font-weight: 600; text-transform: uppercase; '
+                f'letter-spacing: 0.05em; color: #94a3b8; margin-bottom: 2px;">{label}</div>'
+                f'<div style="font-size: 1rem; font-weight: 600; color: #1e293b; '
+                f'font-variant-numeric: tabular-nums;">{value}</div>'
+                f'</div>'
+            )
+
+        _m_mean = _mean_info["mean"]
+        _m_sem = _mean_info["sem"]
+        _m_lo = _mean_info["ci95_low"]
+        _m_hi = _mean_info["ci95_high"]
+        _m_naive = _mean_info["naive_mean"]
+        _m_pop = _mean_info["n_populated"]
+        _m_nblocks = _mean_info["n_blocks"]
+        _delta = (_m_mean - _m_naive) if _m_naive is not None else 0
+        _stats5 = mo.md(
+            f'<div style="display: flex; gap: 8px; flex-wrap: wrap;">'
+            f'{_sc6("Stratified mean", f"{_m_mean:.4f}")}'
+            f'{_sc6("Standard error", f"{_m_sem:.4f}")}'
+            f'{_sc6("95% CI", f"[{_m_lo:.4f}, {_m_hi:.4f}]")}'
+            f'{_sc6("Naive mean", f"{_m_naive:.4f}")}'
+            f'{_sc6("Δ (strat − naive)", f"{_delta:+.4f}")}'
+            f'{_sc6("Populated strata", f"{_m_pop} / 36")}'
+            f'{_sc6("Blocks", str(_m_nblocks))}'
+            f'</div>'
+        )
+
+        # Heatmap 12×3
+        _fig_heat = _go6.Figure(_go6.Heatmap(
+            z=_grid["z"],
+            x=_grid["x_labels"],
+            y=_grid["y_labels"],
+            colorscale="Blues",
+            colorbar=dict(title="Warm rate"),
+            hovertemplate="%{y} · %{x}<br>Mean warm rate: %{z:.4f}<extra></extra>",
+            zmid=_mean_info["mean"],
+        ))
+        _fig_heat.update_layout(
+            xaxis_title="Gas tercile (within segment)",
+            yaxis_title="Time segment (earliest → latest)",
+            yaxis=dict(autorange="reversed"),
+            template="plotly_white",
+            font=dict(family="Inter, system-ui, sans-serif", size=12, color="#475569"),
+            height=480, margin=dict(l=80, r=40, t=10, b=50),
+            plot_bgcolor="white", paper_bgcolor="white",
+        )
+
+        # Segment-level line: mean warm rate per segment (averaged over terciles)
+        _seg_means = []
+        _seg_sems = []
+        for _s in range(1, 13):
+            _rows_seg = [p for p in _per_stratum if p["segment"] == _s and p["n"] > 0]
+            if _rows_seg:
+                _m = sum(p["mean"] for p in _rows_seg) / len(_rows_seg)
+                _v = sum((p["sem"] ** 2) for p in _rows_seg) / (len(_rows_seg) ** 2)
+                _seg_means.append(_m)
+                _seg_sems.append(_math.sqrt(_v))
+            else:
+                _seg_means.append(None)
+                _seg_sems.append(0)
+
+        _fig_seg = _go6.Figure()
+        _fig_seg.add_trace(_go6.Scatter(
+            x=list(range(1, 13)),
+            y=_seg_means,
+            mode="lines+markers",
+            line=dict(color="#3b82f6"),
+            marker=dict(size=8),
+            error_y=dict(type="data", array=_seg_sems, color="#3b82f6", thickness=1.2, width=4),
+            name="Segment mean ± SE",
+        ))
+        _fig_seg.add_hline(
+            y=_mean_info["mean"],
+            line=dict(color="#94a3b8", dash="dash"),
+            annotation=dict(text="Overall stratified mean", showarrow=False),
+        )
+        _fig_seg.update_layout(
+            xaxis_title="Time segment",
+            yaxis_title="Mean warm rate",
+            template="plotly_white", showlegend=False,
+            font=dict(family="Inter, system-ui, sans-serif", size=12, color="#475569"),
+            height=300, margin=dict(l=60, r=40, t=10, b=44),
+            plot_bgcolor="white", paper_bgcolor="white",
+        )
+
+        # Tercile violins
+        _fig_violin = _go6.Figure()
+        _tercile_labels = ["Low gas", "Mid gas", "High gas"]
+        _tercile_colors = ["#94a3b8", "#3b82f6", "#f59e0b"]
+        for _i, (_k, _name, _col) in enumerate(zip(["1", "2", "3"], _tercile_labels, _tercile_colors)):
+            _vals_t = _by_terc.get(_k, [])
+            if _vals_t:
+                _fig_violin.add_trace(_go6.Violin(
+                    y=_vals_t, name=_name,
+                    line_color=_col, fillcolor=_col, opacity=0.6,
+                    box_visible=True, meanline_visible=True, points=False,
+                ))
+        _fig_violin.update_layout(
+            xaxis_title="Gas tercile",
+            yaxis_title="Warm rate per block",
+            template="plotly_white", showlegend=False,
+            font=dict(family="Inter, system-ui, sans-serif", size=12, color="#475569"),
+            height=320, margin=dict(l=60, r=40, t=10, b=44),
+            plot_bgcolor="white", paper_bgcolor="white",
+        )
+
+        _phase5_out = mo.vstack([
+            _stats5,
+            mo.vstack([
+                mo.md('<span class="section-label" style="background: #3b82f618; color: #3b82f6;">Warm rate by stratum (12 segments × 3 gas terciles)</span>'),
+                mo.ui.plotly(_fig_heat),
+            ]),
+            mo.hstack([
+                mo.vstack([
+                    mo.md('<span class="section-label" style="background: #3b82f618; color: #3b82f6;">Mean warm rate by time segment</span>'),
+                    mo.ui.plotly(_fig_seg),
+                ]),
+                mo.vstack([
+                    mo.md('<span class="section-label" style="background: #f59e0b18; color: #f59e0b;">Warm rate distribution by gas tercile</span>'),
+                    mo.ui.plotly(_fig_violin),
+                ]),
+            ]),
+        ], gap=0.6)
+    _phase5_out
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md('<hr style="border: none; border-top: 2px solid #e2e8f0; margin: 16px 0;">')
+    return
+
+
+@app.cell
 def _(is_local, local_conn, mo):
     if not is_local:
         _sql_content = mo.md("""

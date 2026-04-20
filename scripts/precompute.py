@@ -209,6 +209,33 @@ def main():
         "warm_by_contract": _warm_by_contract(),
     }
 
+    # Stratification (Phase 5) — reuses stratification module for consistency
+    try:
+        from eth_tracestat.stratification import (
+            stratified_mean as _strat_mean,
+            warm_rate_grid as _strat_grid,
+            blocks_by_tercile as _strat_byterc,
+            per_stratum_stats as _strat_per,
+        )
+        _mean_info = _strat_mean(conn, "warm_rate")
+        data["stratification"] = {
+            "per_stratum": _strat_per(conn, "warm_rate"),
+            "grid": _strat_grid(conn, "warm_rate"),
+            "by_tercile": {str(k): v for k, v in _strat_byterc(conn, "warm_rate").items()},
+            "mean_info": {
+                "mean": _mean_info["mean"],
+                "sem": _mean_info["sem"],
+                "ci95_low": _mean_info["ci95_low"],
+                "ci95_high": _mean_info["ci95_high"],
+                "naive_mean": _mean_info["naive_mean"],
+                "n_populated": _mean_info["n_strata_populated"],
+                "n_blocks": _mean_info["n_blocks"],
+            },
+        }
+    except Exception as _e:
+        data["stratification"] = {}
+        print(f"Stratification skipped: {_e}")
+
     conn.close()
 
     # Write JSON
