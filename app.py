@@ -642,21 +642,12 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
     if is_local:
         _bmin_sa, _bmax_sa = block_from.value, block_to.value
 
-        # slot warm rate + tercile per block
+        # Scatter: per-block slot vs account warm rate + CSV tercile label.
+        # Pulls (block, gas_tercile) from sample_blocks so points line up with
+        # the stratification design rather than a reshuffled NTILE over the
+        # partial sample.
         _rows_sa = local_conn.execute("""
-            WITH seg AS (
-                SELECT block_num, gas_used,
-                       NTILE(12) OVER (ORDER BY block_num) AS segment
-                FROM blocks
-                WHERE gas_used IS NOT NULL
-                  AND block_num BETWEEN ? AND ?
-            ),
-            terciled AS (
-                SELECT block_num, segment,
-                       NTILE(3) OVER (PARTITION BY segment ORDER BY gas_used) AS gas_tercile
-                FROM seg
-            ),
-            slot AS (
+            WITH slot AS (
                 SELECT block_num,
                        SUM(sload_count + sstore_count) AS T,
                        COUNT(DISTINCT address || '|' || slot) AS U
@@ -672,13 +663,14 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
                 WHERE block_num BETWEEN ? AND ? AND block_num IN (SELECT block_num FROM sample_blocks)
                 GROUP BY block_num
             )
-            SELECT t.block_num, t.gas_tercile,
+            SELECT sb.block_num, sb.gas_tercile,
                    (slot.T - slot.U) * 1.0 / slot.T AS slot_warm,
                    (acct.T - acct.U) * 1.0 / acct.T AS acct_warm
-            FROM terciled t
-            JOIN slot ON slot.block_num = t.block_num AND slot.T > 0
-            JOIN acct ON acct.block_num = t.block_num AND acct.T > 0
-            ORDER BY t.block_num
+            FROM sample_blocks sb
+            JOIN slot ON slot.block_num = sb.block_num AND slot.T > 0
+            JOIN acct ON acct.block_num = sb.block_num AND acct.T > 0
+            WHERE sb.block_num BETWEEN ? AND ?
+            ORDER BY sb.block_num
         """, [_bmin_sa, _bmax_sa, _bmin_sa, _bmax_sa, _bmin_sa, _bmax_sa]).fetchall()
 
         _scatter_data = [
@@ -819,21 +811,15 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
     else:
         _bmin5, _bmax5 = block_from.value, block_to.value
 
-        # Stratum assignment: NTILE(12) over block_num, NTILE(3) over gas_used per segment
+        # Stratum assignment — read CSV-defined (segment, gas_tercile) directly
+        # from sample_blocks. Recomputing NTILE on the partial sample would
+        # shift segment boundaries and can leave some strata artificially empty.
         _strata_rows = local_conn.execute("""
-            WITH seg AS (
-                SELECT block_num, gas_used, timestamp,
-                       NTILE(12) OVER (ORDER BY block_num) AS segment
-                FROM blocks
-                WHERE gas_used IS NOT NULL
-                  AND block_num BETWEEN ? AND ?
-            ),
-            terciled AS (
-                SELECT block_num, gas_used, timestamp, segment,
-                       NTILE(3) OVER (PARTITION BY segment ORDER BY gas_used) AS gas_tercile
-                FROM seg
-            )
-            SELECT block_num, segment, gas_tercile FROM terciled
+            SELECT sb.block_num, sb.segment, sb.gas_tercile
+            FROM sample_blocks sb
+            JOIN blocks b ON b.block_num = sb.block_num
+            WHERE b.block_num BETWEEN ? AND ?
+            ORDER BY sb.block_num
         """, [_bmin5, _bmax5]).fetchall()
         _stratum_of = {r[0]: (r[1], r[2]) for r in _strata_rows}
 
