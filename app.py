@@ -1591,103 +1591,115 @@ def _(mo):
 
     mo.accordion({
         "Sampling design": mo.md("""
-        <div style="font-size: 0.9rem; line-height: 1.6; color: #334155; max-width: 820px;">
+        <style>
+        .method-block { font-size: 0.9rem; line-height: 1.6; color: #334155; max-width: 840px; }
+        .method-block h5 { margin: 16px 0 6px 0 !important; font-size: 0.92rem !important; color: #0f172a !important; font-weight: 600; }
+        .method-block table { border-collapse: collapse; margin: 4px 0 8px 0; width: 100%; }
+        .method-block td { vertical-align: top; padding: 6px 10px; border-top: 1px solid #e2e8f0; }
+        .method-block td:first-child { white-space: nowrap; width: 1%; font-weight: 600; color: #1e293b; }
+        .method-block pre { background: #0f172a; color: #e2e8f0; padding: 10px 14px; border-radius: 6px; font-size: 0.78rem; overflow-x: auto; }
+        .method-block code { background: #f1f5f9; padding: 1px 5px; border-radius: 3px; font-size: 0.82rem; }
+        .method-block pre code { background: transparent; padding: 0; color: inherit; font-size: inherit; }
+        .method-block .ident { background: #fef3c7; padding: 8px 12px; border-radius: 4px; border-left: 3px solid #f59e0b; margin: 8px 0; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
+        </style>
 
-        **Design:** stratified random sampling over a ~2.7M-block population (Ethereum mainnet, April 2025 → April 2026). 12 time segments × 3 gas terciles = 36 strata. 34 blocks drawn uniformly at random from each stratum → <b>1,224 blocks total</b>.
+        <div class="method-block">
 
-        **Stratum boundaries (SQL):**
-        ```sql
-        WITH base AS (
-            SELECT number, time, gas_used, base_fee_per_gas,
-                   NTILE(12) OVER (ORDER BY number) AS segment
-            FROM ethereum.blocks
-            WHERE number BETWEEN 22200000 AND 24900000
-        ),
-        terciled AS (
-            SELECT *,
-                   NTILE(3) OVER (PARTITION BY segment ORDER BY gas_used) AS gas_tercile
-            FROM base
-        )
-        SELECT * FROM terciled WHERE rn <= 34
-        ```
+          <p><b>Design.</b> Stratified random sampling over a ~2.7M-block population (Ethereum mainnet, April 2025 → April 2026). 12 time segments × 3 gas terciles = 36 strata. 34 blocks drawn uniformly at random from each stratum → <b>1,224 blocks total</b>.</p>
 
-        **Why stratified:** time segments balance the sample across the year (avoid over-weighting any one month's workload); gas terciles balance across block utilization levels (avoid over-weighting quiet/busy regimes). Every stratum carries equal weight (1/36) in the population estimator.
+          <h5>Stratum boundaries (SQL used to draw the sample)</h5>
+          <pre><code>WITH base AS (
+    SELECT number, time, gas_used, base_fee_per_gas,
+           NTILE(12) OVER (ORDER BY number) AS segment
+    FROM ethereum.blocks
+    WHERE number BETWEEN 22200000 AND 24900000
+),
+terciled AS (
+    SELECT *,
+           NTILE(3) OVER (PARTITION BY segment ORDER BY gas_used) AS gas_tercile
+    FROM base
+),
+sampled AS (
+    SELECT *,
+           ROW_NUMBER() OVER (PARTITION BY segment, gas_tercile
+                              ORDER BY random()) AS rn
+    FROM terciled
+)
+SELECT * FROM sampled WHERE rn &lt;= 34</code></pre>
 
-        **Filtering:** each sampled block is mapped to its fixed `(segment, gas_tercile)` label from the CSV. Any blocks in the DB that aren't in the sample (e.g., from an earlier consecutive-block census) are excluded from every aggregate, so published numbers reflect only the stratified design.
+          <h5>Why stratified</h5>
+          <p>Time segments balance the sample across the year (avoid over-weighting any one month's workload). Gas terciles balance across block utilization levels (avoid over-weighting quiet/busy regimes). Every stratum carries equal weight 1/36 in the population estimator.</p>
+
+          <h5>Filtering</h5>
+          <p>Each sampled block is mapped to its fixed <code>(segment, gas_tercile)</code> label from the CSV. Any blocks in the DB that aren't in the sample (e.g., from an earlier consecutive-block census) are excluded from every aggregate, so published numbers reflect only the stratified design.</p>
 
         </div>
         """),
         "Warm-rate decomposition identity": mo.md("""
-        <div style="font-size: 0.9rem; line-height: 1.6; color: #334155; max-width: 820px;">
+        <div class="method-block">
 
-        Per block, define:
+          <p>Per block, define:</p>
+          <table>
+            <tr><td><code>T</code></td><td>Total accesses (e.g., SLOAD + SSTORE for the slot metric).</td></tr>
+            <tr><td><code>U_tx</code></td><td>Unique <code>(tx_idx, address, slot)</code> rows in the trace — each tx × slot combo counted once.</td></tr>
+            <tr><td><code>U_block</code></td><td>Unique <code>(address, slot)</code> pairs in the block — each slot counted once regardless of tx.</td></tr>
+          </table>
 
-        | | |
-        |---|---|
-        | `T` | Total accesses (e.g., SLOAD+SSTORE for the slot metric). |
-        | `U_tx` | Unique `(tx_idx, address, slot)` rows in the trace — each tx × slot combo counted once. |
-        | `U_block` | Unique `(address, slot)` pairs in the block — each slot counted once regardless of tx. |
+          <h5>Every access falls into exactly one of three buckets</h5>
+          <table>
+            <tr><td>Cold</td><td><code>U_block</code></td><td>First touch of the slot in the block.</td></tr>
+            <tr><td>Within-tx warm</td><td><code>T − U_tx</code></td><td>Repeats inside a single tx (each row contributes <code>k−1</code> where <code>k</code> = that tx's access count to the slot).</td></tr>
+            <tr><td>Cross-tx warm</td><td><code>U_tx − U_block</code></td><td>First-in-tx access, but the slot was touched by an earlier tx in the same block.</td></tr>
+          </table>
 
-        Every access falls into exactly one of three buckets:
+          <div class="ident">Identity:&nbsp;&nbsp;cold + within + cross = U_block + (T − U_tx) + (U_tx − U_block) = T&nbsp;&nbsp;✓</div>
 
-        | | | |
-        |---|---|---|
-        | **Cold** | `U_block` | First touch of the slot in the block. |
-        | **Within-tx warm** | `T − U_tx` | Repeats inside a single tx (each row contributes `k−1` where `k` = that tx's access count to the slot). |
-        | **Cross-tx warm** | `U_tx − U_block` | First-in-tx access, but the slot was touched by an earlier tx in the same block. |
+          <h5>Worked example</h5>
+          <p>Slot S accessed by three txs in the same block, with per-tx counts <code>{3, 2, 4}</code>:</p>
+          <ul style="margin: 4px 0 8px 18px;">
+            <li>Tx 1: 1 cold + 2 within</li>
+            <li>Tx 2: 1 cross + 1 within</li>
+            <li>Tx 3: 1 cross + 3 within</li>
+            <li>Totals: <code>T=9, U_tx=3, U_block=1</code> → cold=1, within=6, cross=2 (✓ sums to 9)</li>
+          </ul>
 
-        Identity: `cold + within + cross = U_block + (T − U_tx) + (U_tx − U_block) = T` ✓
-
-        **Worked example.** Slot S accessed by three txs in the same block, with per-tx counts `{3, 2, 4}`:
-
-        - Tx 1: 1 cold + 2 within
-        - Tx 2: 1 cross + 1 within
-        - Tx 3: 1 cross + 3 within
-        - Totals: `T=9, U_tx=3, U_block=1` → cold=1, within=6, cross=2 (✓ sums to 9)
-
-        **Account domain** uses the same identity, swapping `storage_ops` for the `calls` table and `(address, slot)` for just `address`.
+          <p><b>Account domain</b> uses the same identity, swapping <code>storage_ops</code> for the <code>calls</code> table and <code>(address, slot)</code> for just <code>address</code>.</p>
 
         </div>
         """),
         "Stratified estimator": mo.md("""
-        <div style="font-size: 0.9rem; line-height: 1.6; color: #334155; max-width: 820px;">
+        <div class="method-block">
 
-        For any per-block metric `y` (e.g., warm rate), the stratified population mean is:
+          <p>For any per-block metric <code>y</code> (e.g., warm rate), the stratified population mean is:</p>
+          <pre><code>ȳ_str = Σ_h w_h · ȳ_h,   w_h = 1/36</code></pre>
 
-        ```
-        ȳ_str = Σ_h w_h · ȳ_h,   w_h = 1/36
-        ```
+          <p>where <code>ȳ_h</code> is the simple mean of <code>y</code> across the <code>n_h</code> blocks sampled in stratum <code>h</code>. Since the NTILE-based design gives each stratum approximately equal population share <code>N_h / N ≈ 1/36</code>, equal weights are the unbiased estimator.</p>
 
-        where `ȳ_h` is the simple mean of `y` across the `n_h` blocks sampled in stratum `h`. Since the NTILE-based design gives each stratum approximately equal population share `N_h/N ≈ 1/36`, equal weights are the unbiased estimator.
+          <h5>Standard error</h5>
+          <p>Square-root of the sum of weighted within-stratum variances:</p>
+          <pre><code>SE(ȳ_str) = √( Σ_h w_h² · (s_h² / n_h) )</code></pre>
 
-        The standard error is the square-root of the sum of weighted within-stratum variances:
+          <p>where <code>s_h²</code> = sample variance of <code>y</code> within stratum h, and <code>n_h</code> = # blocks sampled. (The finite-population correction <code>1 − n_h/N_h</code> is negligible at <code>n_h ≈ 34</code> out of ~75k blocks per stratum, so it's dropped.)</p>
 
-        ```
-        SE(ȳ_str) = √( Σ_h w_h² · (s_h² / n_h) )
-        ```
+          <h5>95% confidence interval</h5>
+          <pre><code>ȳ_str ± 1.96 · SE</code></pre>
 
-        where `s_h² = sample variance of y within stratum h` and `n_h = # blocks sampled`. (The finite-population correction `1 − n_h/N_h` is negligible at `n_h ≈ 34` out of ~75k blocks per stratum, so it's dropped.)
-
-        **95% CI:** `ȳ_str ± 1.96 · SE`.
-
-        **Why compare to the naive mean:** the naive mean weights every sampled block equally rather than every stratum. If the stratified and naive means are close, it confirms the sample is balanced — the strata don't have wildly different per-stratum means relative to their weights.
+          <h5>Why compare to the naive mean</h5>
+          <p>The naive mean weights every sampled block equally rather than every stratum. If the stratified and naive means are close, it confirms the sample is balanced — the strata don't have wildly different per-stratum means relative to their weights.</p>
 
         </div>
         """),
         "Counting caveats worth noting": mo.md("""
-        <div style="font-size: 0.9rem; line-height: 1.6; color: #334155; max-width: 820px;">
+        <div class="method-block">
 
-        **Reverts.** `debug_traceBlockByNumber` records every opcode executed, including those in reverted transactions/calls. Warm counts are therefore slightly inflated — a reverted SLOAD still shows up. The effect is small in aggregate (reverts are a few % of gas) but not zero.
-
-        **Proxy/implementation pairs.** Every `DELEGATECALL` targets an implementation contract whose address is added to the account-access list (per EIP-2929). So calling a proxy counts once under the proxy address and once under its implementation. This inflates raw account totals by ~15–30% in DeFi-heavy txs but is semantically correct for access-list semantics. If your use-case is about code-hash-based caching (not address-based), de-duplicating proxy/impl pairs would be a different metric.
-
-        **Hot-tail effect.** A few transactions per block do thousands of repeat slot accesses (typically solver/aggregator loops). These dominate per-block totals. `within-tx` rates in particular are pulled upward by this tail — representative of real workload but not of a "median" transaction.
-
-        **Storage context.** `SLOAD` and `SSTORE` are attributed to the contract whose *storage* is being read/written — i.e., `DELEGATECALL`/`CALLCODE` inherit the caller's storage context correctly. The tracer maintains an explicit storage stack.
-
-        **Precompiles** (addresses `0x01`–`0x0a`) are excluded from account distributions. They're pre-warmed by protocol and don't participate in reuse dynamics.
-
-        **Contract creations** (tx.to = null) get a synthetic pseudo-address like `0xcreate_tx{i}` so their internal storage touches attribute correctly, but these pseudo-addresses never collide across blocks and always count as cold.
+          <table>
+            <tr><td>Reverts</td><td><code>debug_traceBlockByNumber</code> records every opcode executed, including those in reverted transactions/calls. Warm counts are therefore slightly inflated — a reverted SLOAD still shows up. The effect is small in aggregate (reverts are a few % of gas) but not zero.</td></tr>
+            <tr><td>Proxy/impl pairs</td><td>Every <code>DELEGATECALL</code> targets an implementation contract whose address is added to the account-access list (per EIP-2929). So calling a proxy counts once under the proxy address and once under its implementation. This inflates raw account totals by ~15–30% in DeFi-heavy txs but is semantically correct for access-list semantics. If the target is code-hash-based caching (not address-based), de-duplicating proxy/impl pairs would be a different metric.</td></tr>
+            <tr><td>Hot-tail effect</td><td>A few transactions per block do thousands of repeat slot accesses (typically solver/aggregator loops). These dominate per-block totals. Within-tx rates in particular are pulled upward by this tail — representative of real workload but not of a "median" transaction.</td></tr>
+            <tr><td>Storage context</td><td><code>SLOAD</code> and <code>SSTORE</code> are attributed to the contract whose <i>storage</i> is being read/written — i.e., <code>DELEGATECALL</code> / <code>CALLCODE</code> inherit the caller's storage context correctly. The tracer maintains an explicit storage stack.</td></tr>
+            <tr><td>Precompiles</td><td>Addresses <code>0x01</code>–<code>0x0a</code> are excluded from account distributions. They're pre-warmed by protocol (on chains that use this distinction) and don't participate in reuse dynamics.</td></tr>
+            <tr><td>Contract creations</td><td>When <code>tx.to</code> is null, we assign a synthetic pseudo-address like <code>0xcreate_tx{i}</code> so internal storage touches attribute correctly. These pseudo-addresses never collide across blocks and always count as cold.</td></tr>
+          </table>
 
         </div>
         """),
