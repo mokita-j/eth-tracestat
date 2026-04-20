@@ -144,6 +144,16 @@ def _(json, mo, os):
     if os.path.exists(_local_db):
         import sqlite3 as _sql
         local_conn = _sql.connect(_local_db)
+
+        # Register the stratified sample as a TEMP TABLE so every query
+        # filters to the sampled blocks and reads (segment, gas_tercile)
+        # from the CSV rather than recomputing NTILE on a partial sample.
+        try:
+            from eth_tracestat.sample import register_sample_table as _rst
+            _rst(local_conn, "sample_blocks.csv")
+        except Exception as _e:
+            print(f"Sample registration skipped: {_e}")
+
         static_data = None
         is_local = True
     elif _embedded is not None:
@@ -188,13 +198,16 @@ def _(is_local, local_conn, mo, static_data):
         )
 
     # Load the stratified population estimates for both domains
+    _sample_stats = {}
     if is_local:
         try:
             from eth_tracestat.stratification import stratified_mean as _sm
+            from eth_tracestat.sample import sample_info as _si
             _slot_mean = _sm(local_conn, "warm_rate", domain="slot")
             _slot_cross_rate = _sm(local_conn, "cross_rate", domain="slot")
             _acct_mean = _sm(local_conn, "warm_rate", domain="account")
             _acct_cross_rate = _sm(local_conn, "cross_rate", domain="account")
+            _sample_stats = _si(local_conn)
         except Exception:
             _slot_mean = _slot_cross_rate = _acct_mean = _acct_cross_rate = None
     else:
@@ -203,6 +216,7 @@ def _(is_local, local_conn, mo, static_data):
         _slot_cross_rate = _sd.get("stratification_extras", {}).get("slot_cross", {}) or None
         _acct_mean = _sd.get("stratification_extras", {}).get("account_mean", {}) or None
         _acct_cross_rate = _sd.get("stratification_extras", {}).get("account_cross", {}) or None
+        _sample_stats = _sd.get("sample_info", {}) or {}
 
     _intro_md = mo.md(
         '<p class="section-desc" style="font-size: 1.05rem; line-height: 1.6; '
@@ -235,7 +249,12 @@ def _(is_local, local_conn, mo, static_data):
                 "Sample",
                 f'{_nblocks:,} blocks',
                 accent="#10b981",
-                hint=f'Stratified 12×3 · Apr 2025 → Apr 2026',
+                hint=(
+                    f'Stratified 12×3 · CSV-defined strata · '
+                    f'{_sample_stats.get("n_extras", 0)} non-sample blocks excluded'
+                    if _sample_stats else
+                    'Stratified 12×3 · Apr 2025 → Apr 2026'
+                ),
             ),
         ]
         _banner_html = (
@@ -297,7 +316,7 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
                 COUNT(*)                                   AS U_tx,
                 COUNT(DISTINCT address || '|' || slot)     AS U_block
             FROM storage_ops
-            WHERE block_num BETWEEN ? AND ?
+            WHERE block_num BETWEEN ? AND ? AND block_num IN (SELECT block_num FROM sample_blocks)
             GROUP BY block_num
             ORDER BY block_num
         """, [_bmin_w, _bmax_w]).fetchall()
@@ -413,7 +432,7 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
                 COUNT(*)                                   AS U_tx,
                 COUNT(DISTINCT address || '|' || slot)     AS U_block
             FROM storage_ops
-            WHERE block_num BETWEEN ? AND ?
+            WHERE block_num BETWEEN ? AND ? AND block_num IN (SELECT block_num FROM sample_blocks)
             GROUP BY block_num
             ORDER BY block_num
         """, [_bmin_d, _bmax_d]).fetchall()
@@ -503,7 +522,7 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
                        COUNT(*)                 AS U_tx,
                        COUNT(DISTINCT address)  AS U_block
                 FROM calls
-                WHERE block_num BETWEEN ? AND ?
+                WHERE block_num BETWEEN ? AND ? AND block_num IN (SELECT block_num FROM sample_blocks)
                 GROUP BY block_num
                 ORDER BY block_num
             """, [_bmin_d, _bmax_d]).fetchall()
@@ -642,7 +661,7 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
                        SUM(sload_count + sstore_count) AS T,
                        COUNT(DISTINCT address || '|' || slot) AS U
                 FROM storage_ops
-                WHERE block_num BETWEEN ? AND ?
+                WHERE block_num BETWEEN ? AND ? AND block_num IN (SELECT block_num FROM sample_blocks)
                 GROUP BY block_num
             ),
             acct AS (
@@ -650,7 +669,7 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
                        SUM(call_count) AS T,
                        COUNT(DISTINCT address) AS U
                 FROM calls
-                WHERE block_num BETWEEN ? AND ?
+                WHERE block_num BETWEEN ? AND ? AND block_num IN (SELECT block_num FROM sample_blocks)
                 GROUP BY block_num
             )
             SELECT t.block_num, t.gas_tercile,
@@ -825,7 +844,7 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
                    COUNT(*) AS U_tx,
                    COUNT(DISTINCT address || '|' || slot) AS U_block
             FROM storage_ops
-            WHERE block_num BETWEEN ? AND ?
+            WHERE block_num BETWEEN ? AND ? AND block_num IN (SELECT block_num FROM sample_blocks)
             GROUP BY block_num
         """, [_bmin5, _bmax5]).fetchall()
         _rate_of = {
@@ -1102,7 +1121,7 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
                        SUM(sload_count + sstore_count) AS T,
                        COUNT(DISTINCT address || '|' || slot) AS U_block
                 FROM storage_ops
-                WHERE block_num BETWEEN ? AND ?
+                WHERE block_num BETWEEN ? AND ? AND block_num IN (SELECT block_num FROM sample_blocks)
                 GROUP BY block_num
             """, [_bmin_c, _bmax_c]).fetchall()
         }
@@ -1112,7 +1131,7 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
         for _row_c in local_conn.execute("""
             SELECT block_num, SUM(sload_count + sstore_count) AS n
             FROM storage_ops
-            WHERE block_num BETWEEN ? AND ?
+            WHERE block_num BETWEEN ? AND ? AND block_num IN (SELECT block_num FROM sample_blocks)
             GROUP BY block_num, address, slot
             ORDER BY block_num, n DESC
         """, [_bmin_c, _bmax_c]).fetchall():
@@ -1133,7 +1152,7 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
         _freq_rows = local_conn.execute("""
             SELECT SUM(sload_count + sstore_count) AS n
             FROM storage_ops
-            WHERE block_num BETWEEN ? AND ?
+            WHERE block_num BETWEEN ? AND ? AND block_num IN (SELECT block_num FROM sample_blocks)
             GROUP BY block_num, address, slot
         """, [_bmin_c, _bmax_c]).fetchall()
         _freq_pool = {"1": 0, "2": 0, "3-5": 0, "6-10": 0, "11+": 0}
@@ -1154,7 +1173,7 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
                    SUM(sload_count + sstore_count) AS T,
                    COUNT(DISTINCT address || '|' || slot) AS U_block
             FROM storage_ops
-            WHERE block_num BETWEEN ? AND ?
+            WHERE block_num BETWEEN ? AND ? AND block_num IN (SELECT block_num FROM sample_blocks)
             GROUP BY block_num
         """, [_bmin_c, _bmax_c]).fetchall()
         _warm_for_scatter = [
@@ -1324,7 +1343,7 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
                        SUM(sload_count + sstore_count)    AS total_access,
                        COUNT(DISTINCT slot)               AS unique_slots
                 FROM storage_ops
-                WHERE block_num BETWEEN ? AND ?
+                WHERE block_num BETWEEN ? AND ? AND block_num IN (SELECT block_num FROM sample_blocks)
                 GROUP BY block_num, address
             ) sub
             GROUP BY address
@@ -1653,27 +1672,27 @@ def _(block_from, block_to, go, is_local, local_conn, mo, np, static_data):
         ("ns_b",
          "SELECT op_count AS n, COUNT(*) AS cnt FROM ("
          "  SELECT SUM(sload_count + sstore_count) AS op_count"
-         "  FROM storage_ops WHERE block_num BETWEEN ? AND ?"
+         "  FROM storage_ops WHERE block_num BETWEEN ? AND ? AND block_num IN (SELECT block_num FROM sample_blocks)"
          "  GROUP BY block_num, address, slot) GROUP BY n ORDER BY n",
          "N(s, B)", "Per-block slot accesses",
          "SLOAD+SSTORE ops per (address, slot) per block. Measures block-level storage warming potential.",
          "max_slots_block", "Max unique slots/block"),
         ("na_b",
          "SELECT call_count AS n, COUNT(*) AS cnt FROM ("
-         "  SELECT SUM(call_count) AS call_count FROM calls WHERE block_num BETWEEN ? AND ?"
+         "  SELECT SUM(call_count) AS call_count FROM calls WHERE block_num BETWEEN ? AND ? AND block_num IN (SELECT block_num FROM sample_blocks)"
          "  GROUP BY block_num, address) GROUP BY n ORDER BY n",
          "N(a, B)", "Per-block account calls",
          "Calls per address per block. Precompiles excluded.",
          "max_addrs_block", "Max unique addresses/block"),
         ("ns_t",
          "SELECT sload_count + sstore_count AS n, COUNT(*) AS cnt"
-         " FROM storage_ops WHERE block_num BETWEEN ? AND ? GROUP BY n ORDER BY n",
+         " FROM storage_ops WHERE block_num BETWEEN ? AND ? AND block_num IN (SELECT block_num FROM sample_blocks) GROUP BY n ORDER BY n",
          "N(s, T)", "Per-tx slot accesses",
          "SLOAD+SSTORE ops per (address, slot) within a single tx.",
          "max_slots_tx", "Max unique slots/tx"),
         ("na_t",
          "SELECT call_count AS n, COUNT(*) AS cnt"
-         " FROM calls WHERE block_num BETWEEN ? AND ? GROUP BY n ORDER BY n",
+         " FROM calls WHERE block_num BETWEEN ? AND ? AND block_num IN (SELECT block_num FROM sample_blocks) GROUP BY n ORDER BY n",
          "N(a, T)", "Per-tx account calls",
          "Calls to a single address within one tx.",
          "max_addrs_tx", "Max unique addresses/tx"),
@@ -1694,7 +1713,7 @@ def _(block_from, block_to, go, is_local, local_conn, mo, np, static_data):
             _extra_val = local_conn.execute(
                 f"SELECT MAX(cnt) FROM (SELECT COUNT(DISTINCT {_distinct_expr})"
                 f" AS cnt FROM {_table_name}"
-                f" WHERE block_num BETWEEN ? AND ?"
+                f" WHERE block_num BETWEEN ? AND ? AND block_num IN (SELECT block_num FROM sample_blocks)"
                 f" GROUP BY {_group_by})",
                 [_bmin, _bmax],
             ).fetchone()[0] or 0
@@ -1754,12 +1773,12 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
         _slots = local_conn.execute(
             "SELECT address, slot, SUM(sload_count), SUM(sstore_count), "
             "SUM(sload_count + sstore_count) AS total "
-            "FROM storage_ops WHERE block_num BETWEEN ? AND ? "
+            "FROM storage_ops WHERE block_num BETWEEN ? AND ? AND block_num IN (SELECT block_num FROM sample_blocks) "
             "GROUP BY address, slot ORDER BY total DESC LIMIT 30", _params,
         ).fetchall()
         _accts = local_conn.execute(
             "SELECT address, SUM(call_count) AS total, COUNT(DISTINCT block_num) "
-            "FROM calls WHERE block_num BETWEEN ? AND ? "
+            "FROM calls WHERE block_num BETWEEN ? AND ? AND block_num IN (SELECT block_num FROM sample_blocks) "
             "GROUP BY address ORDER BY total DESC LIMIT 30", _params,
         ).fetchall()
         _slot_data = [{"address": r[0], "slot": f"0x{r[1][:16]}...", "SLOADs": r[2], "SSTOREs": r[3], "total": r[4]}

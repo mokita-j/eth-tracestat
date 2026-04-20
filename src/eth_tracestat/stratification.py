@@ -4,9 +4,16 @@ The sampling design is:
   12 time segments × 3 gas terciles = 36 strata
   ~34 blocks per stratum → ~1,224 blocks total
 
-Stratum assignment per block:
-  segment     = NTILE(12) OVER (ORDER BY block_num)
-  gas_tercile = NTILE(3)  OVER (PARTITION BY segment ORDER BY gas_used)
+Preferred source of stratum labels: a `sample_blocks` table registered in
+the connection (see `sample.register_sample_table`). When present, we use
+its (segment, gas_tercile) labels directly and restrict all analyses to
+those blocks. The labels in the CSV were computed against the full
+~2.7M-block population, which is the right reference for our weights.
+
+Fallback: NTILE-on-the-blocks-table recomputation, used only when no
+sample table is registered. This is a best-effort approximation and
+mixes any extra (non-sampled) blocks with the sample — not recommended
+for publication-quality estimates.
 
 Given proportional stratified random sampling where each stratum has
 (approximately) equal population size, the unbiased estimator for a
@@ -20,16 +27,13 @@ and its variance is:
 
 For blocks sampled from a 2.7M-block population with n_h ≈ 34 each, the
 finite-population correction (1 - n_h/N_h) ≈ 1 and is dropped here.
-
-The implementation works with any dataset that has gas_used populated in
-the blocks table — strata are reconstructed from the sample itself, which
-is a reasonable approximation since the original sampling used the same
-NTILE scheme against the full population.
 """
 
 import math
 import sqlite3
 from collections import defaultdict
+
+from .sample import has_sample_table
 
 
 N_SEGMENTS = 12
@@ -41,31 +45,43 @@ def assign_strata(
     n_segments: int = N_SEGMENTS,
     n_terciles: int = N_TERCILES,
 ) -> list[dict]:
-    """Return per-block stratum assignment reconstructed from the sample.
+    """Return per-block stratum assignment.
+
+    If a `sample_blocks` table is registered in `conn` (recommended),
+    reads the labels directly from it. Otherwise falls back to NTILE-on-
+    the-blocks-table.
 
     Each dict: {block, gas_used, timestamp, segment, gas_tercile, stratum_id}
     stratum_id = (segment - 1) * n_terciles + gas_tercile (1-indexed).
     """
-    rows = conn.execute(f"""
-        WITH seg AS (
-            SELECT
-                block_num, gas_used, timestamp,
-                NTILE({n_segments}) OVER (ORDER BY block_num) AS segment
-            FROM blocks
-            WHERE gas_used IS NOT NULL
-        ),
-        terciled AS (
-            SELECT
-                block_num, gas_used, timestamp, segment,
-                NTILE({n_terciles}) OVER (
-                    PARTITION BY segment ORDER BY gas_used
-                ) AS gas_tercile
-            FROM seg
-        )
-        SELECT block_num, gas_used, timestamp, segment, gas_tercile
-        FROM terciled
-        ORDER BY block_num
-    """).fetchall()
+    if has_sample_table(conn):
+        rows = conn.execute("""
+            SELECT sb.block_num, b.gas_used, b.timestamp, sb.segment, sb.gas_tercile
+            FROM sample_blocks sb
+            JOIN blocks b ON b.block_num = sb.block_num
+            ORDER BY sb.block_num
+        """).fetchall()
+    else:
+        rows = conn.execute(f"""
+            WITH seg AS (
+                SELECT
+                    block_num, gas_used, timestamp,
+                    NTILE({n_segments}) OVER (ORDER BY block_num) AS segment
+                FROM blocks
+                WHERE gas_used IS NOT NULL
+            ),
+            terciled AS (
+                SELECT
+                    block_num, gas_used, timestamp, segment,
+                    NTILE({n_terciles}) OVER (
+                        PARTITION BY segment ORDER BY gas_used
+                    ) AS gas_tercile
+                FROM seg
+            )
+            SELECT block_num, gas_used, timestamp, segment, gas_tercile
+            FROM terciled
+            ORDER BY block_num
+        """).fetchall()
 
     return [
         {
@@ -86,28 +102,32 @@ def _warm_rates_by_block(
 ) -> dict[int, dict]:
     """Return {block_num -> {warm_rate, within_rate, cross_rate, T}}.
 
-    domain ∈ {"slot", "account"} selects the underlying table:
-      - "slot":    storage_ops grouped by (tx_idx, address, slot)
-      - "account": calls       grouped by (tx_idx, address)
+    Restricts to sampled blocks when `sample_blocks` is registered.
     """
+    filt = (
+        "WHERE block_num IN (SELECT block_num FROM sample_blocks)"
+        if has_sample_table(conn) else ""
+    )
     if domain == "account":
-        sql = """
+        sql = f"""
             SELECT
                 block_num,
                 SUM(call_count)           AS T,
                 COUNT(*)                  AS U_tx,
                 COUNT(DISTINCT address)   AS U_block
             FROM calls
+            {filt}
             GROUP BY block_num
         """
     else:
-        sql = """
+        sql = f"""
             SELECT
                 block_num,
                 SUM(sload_count + sstore_count)            AS T,
                 COUNT(*)                                   AS U_tx,
                 COUNT(DISTINCT address || '|' || slot)     AS U_block
             FROM storage_ops
+            {filt}
             GROUP BY block_num
         """
     rows = conn.execute(sql).fetchall()

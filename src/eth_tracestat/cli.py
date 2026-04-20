@@ -117,10 +117,10 @@ def fetch_or_cache(url: str | None, block_num: int, cache: TraceCache | None) ->
 
 
 def _print_warm_report(db_path: str) -> None:
-    import sqlite3
+    from .sample import connect_with_sample
     from .warm_analysis import per_block_warm, warm_by_contract
 
-    conn = sqlite3.connect(db_path)
+    conn = connect_with_sample(db_path)
     rows = per_block_warm(conn)
     if not rows:
         print("No data in results DB.", file=sys.stderr)
@@ -166,10 +166,10 @@ def _print_warm_report(db_path: str) -> None:
 
 
 def _print_strat_report(db_path: str) -> None:
-    import sqlite3
+    from .sample import connect_with_sample
     from .stratification import stratified_mean, per_stratum_stats
 
-    conn = sqlite3.connect(db_path)
+    conn = connect_with_sample(db_path)
     n_with_gas = conn.execute(
         "SELECT COUNT(*) FROM blocks WHERE gas_used IS NOT NULL"
     ).fetchone()[0]
@@ -214,11 +214,11 @@ def _print_strat_report(db_path: str) -> None:
 
 
 def _print_account_report(db_path: str) -> None:
-    import sqlite3
+    from .sample import connect_with_sample
     from .warm_analysis import per_block_warm_accounts, per_block_warm
     from .stratification import stratified_mean
 
-    conn = sqlite3.connect(db_path)
+    conn = connect_with_sample(db_path)
     slot = per_block_warm(conn)
     acct = per_block_warm_accounts(conn)
     if not slot or not acct:
