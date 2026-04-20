@@ -1555,12 +1555,45 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
             'disproportionate share of all reuse in a typical block.'
             '</p>'
         )
+        # Clickable ranking table — plotly can't make y-axis labels clickable,
+        # so show the addresses with Etherscan links in an accompanying table.
+        _table_rows = "".join(
+            f'<tr>'
+            f'<td style="text-align: right; color: #94a3b8; font-variant-numeric: tabular-nums;">{i + 1}</td>'
+            f'<td><a href="https://etherscan.io/address/{d["address"]}" target="_blank" rel="noopener" '
+            f'style="color: #3b82f6; text-decoration: none; font-family: JetBrains Mono, monospace;">'
+            f'{d["address"]}</a></td>'
+            f'<td style="text-align: right; font-variant-numeric: tabular-nums;">{d["warm_accesses"]:,}</td>'
+            f'<td style="text-align: right; font-variant-numeric: tabular-nums;">{d["total_accesses"]:,}</td>'
+            f'<td style="text-align: right; font-variant-numeric: tabular-nums;">{d["blocks_present"]}</td>'
+            f'</tr>'
+            for i, d in enumerate(_top)
+        )
+        _contracts_table = mo.md(
+            f'<div style="max-width: 960px; font-size: 0.85rem;">'
+            f'<table style="border-collapse: collapse; width: 100%;">'
+            f'<thead><tr style="border-bottom: 1px solid #e2e8f0;">'
+            f'<th style="text-align: right; padding: 6px 10px; color: #94a3b8; font-weight: 600; font-size: 0.72rem; text-transform: uppercase;">#</th>'
+            f'<th style="text-align: left; padding: 6px 10px; color: #94a3b8; font-weight: 600; font-size: 0.72rem; text-transform: uppercase;">Contract ↗</th>'
+            f'<th style="text-align: right; padding: 6px 10px; color: #94a3b8; font-weight: 600; font-size: 0.72rem; text-transform: uppercase;">Warm accesses</th>'
+            f'<th style="text-align: right; padding: 6px 10px; color: #94a3b8; font-weight: 600; font-size: 0.72rem; text-transform: uppercase;">Total accesses</th>'
+            f'<th style="text-align: right; padding: 6px 10px; color: #94a3b8; font-weight: 600; font-size: 0.72rem; text-transform: uppercase;">Blocks present</th>'
+            f'</tr></thead>'
+            f'<tbody>{_table_rows}</tbody>'
+            f'</table>'
+            f'<p style="font-size: 0.75rem; color: #94a3b8; margin-top: 8px;">'
+            f'Addresses link to Etherscan for inspection.'
+            f'</p>'
+            f'</div>'
+        )
+
         _phase4_out = mo.vstack([
             _stats4,
             _phase4_interp,
             mo.vstack([
                 mo.md('<span class="section-label" style="background: #3b82f618; color: #3b82f6;">Top contracts by warm access contribution</span>'),
                 mo.ui.plotly(_fig_bar),
+                _contracts_table,
             ]),
             mo.vstack([
                 mo.md('<span class="section-label" style="background: #3b82f618; color: #3b82f6;">Warm access share — top 5 / top 10 / rest</span>'),
@@ -2002,18 +2035,73 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
                       for s in static_data["top_slots"]]
         _acct_data = static_data["top_accounts"]
 
+    def _addr_link(addr):
+        return (
+            f'<a href="https://etherscan.io/address/{addr}" target="_blank" rel="noopener" '
+            f'style="color: #3b82f6; text-decoration: none; font-family: JetBrains Mono, monospace; font-size: 0.78rem;">'
+            f'{addr[:10]}…{addr[-6:]}</a>'
+        )
+
+    if _slot_data:
+        _slot_rows = "".join(
+            f'<tr>'
+            f'<td style="padding: 4px 8px;">{_addr_link(r["address"])}</td>'
+            f'<td style="padding: 4px 8px; font-family: JetBrains Mono, monospace; font-size: 0.76rem;">{r["slot"]}</td>'
+            f'<td style="padding: 4px 8px; text-align: right; font-variant-numeric: tabular-nums;">{r["SLOADs"]:,}</td>'
+            f'<td style="padding: 4px 8px; text-align: right; font-variant-numeric: tabular-nums;">{r["SSTOREs"]:,}</td>'
+            f'<td style="padding: 4px 8px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600;">{r["total"]:,}</td>'
+            f'</tr>'
+            for r in _slot_data
+        )
+        _slot_html = mo.md(
+            f'<div style="font-size: 0.85rem; overflow-x: auto;">'
+            f'<table style="border-collapse: collapse; width: 100%;">'
+            f'<thead><tr style="border-bottom: 1px solid #e2e8f0;">'
+            f'<th style="text-align: left; padding: 4px 8px; color: #94a3b8; font-weight: 600; font-size: 0.7rem; text-transform: uppercase;">Address ↗</th>'
+            f'<th style="text-align: left; padding: 4px 8px; color: #94a3b8; font-weight: 600; font-size: 0.7rem; text-transform: uppercase;">Slot</th>'
+            f'<th style="text-align: right; padding: 4px 8px; color: #94a3b8; font-weight: 600; font-size: 0.7rem; text-transform: uppercase;">SLOADs</th>'
+            f'<th style="text-align: right; padding: 4px 8px; color: #94a3b8; font-weight: 600; font-size: 0.7rem; text-transform: uppercase;">SSTOREs</th>'
+            f'<th style="text-align: right; padding: 4px 8px; color: #94a3b8; font-weight: 600; font-size: 0.7rem; text-transform: uppercase;">Total</th>'
+            f'</tr></thead>'
+            f'<tbody>{_slot_rows}</tbody>'
+            f'</table>'
+            f'</div>'
+        )
+    else:
+        _slot_html = mo.md("*No data*")
+
+    if _acct_data:
+        _acct_rows = "".join(
+            f'<tr>'
+            f'<td style="padding: 4px 8px;">{_addr_link(r["address"])}</td>'
+            f'<td style="padding: 4px 8px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600;">{r["total_calls"]:,}</td>'
+            f'<td style="padding: 4px 8px; text-align: right; font-variant-numeric: tabular-nums;">{r["blocks_present"]}</td>'
+            f'</tr>'
+            for r in _acct_data
+        )
+        _acct_html = mo.md(
+            f'<div style="font-size: 0.85rem; overflow-x: auto;">'
+            f'<table style="border-collapse: collapse; width: 100%;">'
+            f'<thead><tr style="border-bottom: 1px solid #e2e8f0;">'
+            f'<th style="text-align: left; padding: 4px 8px; color: #94a3b8; font-weight: 600; font-size: 0.7rem; text-transform: uppercase;">Address ↗</th>'
+            f'<th style="text-align: right; padding: 4px 8px; color: #94a3b8; font-weight: 600; font-size: 0.7rem; text-transform: uppercase;">Total calls</th>'
+            f'<th style="text-align: right; padding: 4px 8px; color: #94a3b8; font-weight: 600; font-size: 0.7rem; text-transform: uppercase;">Blocks</th>'
+            f'</tr></thead>'
+            f'<tbody>{_acct_rows}</tbody>'
+            f'</table>'
+            f'</div>'
+        )
+    else:
+        _acct_html = mo.md("*No data*")
+
     mo.hstack([
         mo.vstack([
             mo.md('<span class="section-label" style="background: #3b82f618; color: #3b82f6;">STORAGE SLOTS</span>'),
-            mo.ui.table(_slot_data, selection=None, pagination=False,
-                        show_column_summaries=False, show_data_types=False, show_download=False)
-            if _slot_data else mo.md("*No data*"),
+            _slot_html,
         ]),
         mo.vstack([
             mo.md('<span class="section-label" style="background: #3b82f618; color: #3b82f6;">ACCOUNTS</span>'),
-            mo.ui.table(_acct_data, selection=None, pagination=False,
-                        show_column_summaries=False, show_data_types=False, show_download=False)
-            if _acct_data else mo.md("*No data*"),
+            _acct_html,
         ]),
     ], widths=[3, 2])
     return
