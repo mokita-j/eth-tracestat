@@ -312,7 +312,7 @@ def _(mo):
       <h4>Three access states (every access is one of these)</h4>
       <table>
         <tr><td>Cold</td><td>The first time this target is touched in the block. Count: one per unique target per block.</td></tr>
-        <tr><td>Within-tx warm</td><td>A repeat access to the same target inside the same transaction. Any execution engine with opcode-level caching already exploits this.</td></tr>
+        <tr><td>Within-tx warm</td><td>A repeat access to the same target inside the same transaction. Whether a runtime exploits this (by charging repeat accesses cheaply) depends on the runtime — some do (e.g. post-EIP-2929 Ethereum), some don't.</td></tr>
         <tr><td>Cross-tx warm</td><td>A first-in-tx access to a target that an <i>earlier transaction in the same block</i> already touched. Exploiting these requires block-scoped caching.</td></tr>
       </table>
       <div class="ident">Identity:&nbsp;&nbsp;cold + within + cross = T</div>
@@ -456,9 +456,9 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
             'accessed <code>(address, slot)</code> is reuse. The long left tail (blocks below 60%) '
             'tends to be light blocks with few recurring contracts; the right tail is busy blocks '
             'dominated by a handful of high-traffic contracts. What the single histogram cannot tell '
-            'us is whether this reuse happens inside single transactions (already exploited by any '
-            'execution engine) or across transactions in the same block (the opportunity for block-'
-            'scoped caching) — the next section decomposes that.'
+            'us is whether this reuse happens inside single transactions (a tx-scoped caching '
+            'opportunity) or across transactions in the same block (a block-scoped caching '
+            'opportunity) — the next section decomposes that.'
             '</p>'
         )
         _phase1_out = mo.vstack([mo.md(_stats_html), mo.ui.plotly(_fig1), _phase1_interp], gap=0.6)
@@ -479,7 +479,7 @@ def _(mo):
 
     <p class="section-desc">
     Warm accesses split into two structurally distinct kinds:<br>
-    <b>Within-tx reuse</b> — repeat access to a slot already touched earlier <i>in the same transaction</i>. Any runtime with execution-scoped caching already exploits this.<br>
+    <b>Within-tx reuse</b> — repeat access to a slot already touched earlier <i>in the same transaction</i>. Whether a runtime exploits this (prices repeats cheaply) is runtime-specific — EVM post-EIP-2929 does, some runtimes don't.<br>
     <b>Cross-tx reuse</b> — first access in a transaction to a slot already touched by an <i>earlier transaction</i> in the same block. Exploiting this requires <i>block-scoped</i> caching — state kept hot across transaction boundaries within a block. This is the quantified opportunity for block-level storage caching, runtime-independent.
     </p>
 
@@ -558,7 +558,7 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
         _stats2 = mo.md(
             f'<div style="display: flex; gap: 8px; flex-wrap: wrap;">'
             f'{_sc3("Warm rate", f"{_mean_total:.3f}", "share of accesses that are repeats (mean across blocks)")}'
-            f'{_sc3("Within-tx share", f"{_mean_within:.3f}", "repeats inside one tx · already exploited by any engine", "#3b82f6")}'
+            f'{_sc3("Within-tx share", f"{_mean_within:.3f}", "repeats of a slot within a single tx", "#3b82f6")}'
             f'{_sc3("Cross-tx share", f"{_mean_cross:.3f}", "repeats across txs in same block · block-cache opportunity", "#f59e0b")}'
             f'{_sc3("Cross ÷ warm", f"{_mean_cross / _mean_total:.1%}" if _mean_total else "—", "of all warm accesses, fraction that is cross-tx")}'
             f'</div>'
