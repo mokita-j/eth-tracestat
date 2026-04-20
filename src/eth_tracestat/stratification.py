@@ -80,17 +80,37 @@ def assign_strata(
     ]
 
 
-def _warm_rates_by_block(conn: sqlite3.Connection) -> dict[int, dict]:
-    """Return {block_num -> {warm_rate, within_rate, cross_rate, T}}."""
-    rows = conn.execute("""
-        SELECT
-            block_num,
-            SUM(sload_count + sstore_count)            AS T,
-            COUNT(*)                                   AS U_tx,
-            COUNT(DISTINCT address || '|' || slot)     AS U_block
-        FROM storage_ops
-        GROUP BY block_num
-    """).fetchall()
+def _warm_rates_by_block(
+    conn: sqlite3.Connection,
+    domain: str = "slot",
+) -> dict[int, dict]:
+    """Return {block_num -> {warm_rate, within_rate, cross_rate, T}}.
+
+    domain ∈ {"slot", "account"} selects the underlying table:
+      - "slot":    storage_ops grouped by (tx_idx, address, slot)
+      - "account": calls       grouped by (tx_idx, address)
+    """
+    if domain == "account":
+        sql = """
+            SELECT
+                block_num,
+                SUM(call_count)           AS T,
+                COUNT(*)                  AS U_tx,
+                COUNT(DISTINCT address)   AS U_block
+            FROM calls
+            GROUP BY block_num
+        """
+    else:
+        sql = """
+            SELECT
+                block_num,
+                SUM(sload_count + sstore_count)            AS T,
+                COUNT(*)                                   AS U_tx,
+                COUNT(DISTINCT address || '|' || slot)     AS U_block
+            FROM storage_ops
+            GROUP BY block_num
+        """
+    rows = conn.execute(sql).fetchall()
     out: dict[int, dict] = {}
     for block_num, T, U_tx, U_block in rows:
         if not T:
@@ -109,6 +129,7 @@ def per_stratum_stats(
     metric: str = "warm_rate",
     n_segments: int = N_SEGMENTS,
     n_terciles: int = N_TERCILES,
+    domain: str = "slot",
 ) -> list[dict]:
     """Per-stratum summary for a given metric.
 
@@ -116,10 +137,11 @@ def per_stratum_stats(
       {segment, gas_tercile, n, mean, std, sem}
 
     metric ∈ {"warm_rate", "within_rate", "cross_rate"}.
+    domain ∈ {"slot", "account"}.
     Missing (empty) strata are still emitted with n=0.
     """
     strata = assign_strata(conn, n_segments, n_terciles)
-    rates = _warm_rates_by_block(conn)
+    rates = _warm_rates_by_block(conn, domain)
 
     groups: dict[tuple[int, int], list[float]] = defaultdict(list)
     for s in strata:
@@ -159,6 +181,7 @@ def stratified_mean(
     metric: str = "warm_rate",
     n_segments: int = N_SEGMENTS,
     n_terciles: int = N_TERCILES,
+    domain: str = "slot",
 ) -> dict:
     """Stratified point estimate + standard error for a metric.
 
@@ -178,7 +201,7 @@ def stratified_mean(
             "per_stratum": list from per_stratum_stats(...)
         }
     """
-    per = per_stratum_stats(conn, metric, n_segments, n_terciles)
+    per = per_stratum_stats(conn, metric, n_segments, n_terciles, domain)
     populated = [s for s in per if s["n"] > 0]
     H = n_segments * n_terciles
     w = 1.0 / H
@@ -200,7 +223,7 @@ def stratified_mean(
     # Naive mean: each block weighted equally, no stratum correction.
     all_vals = []
     strata = assign_strata(conn, n_segments, n_terciles)
-    rates = _warm_rates_by_block(conn)
+    rates = _warm_rates_by_block(conn, domain)
     for s in strata:
         r = rates.get(s["block"])
         if r is not None:
@@ -225,6 +248,7 @@ def warm_rate_grid(
     metric: str = "warm_rate",
     n_segments: int = N_SEGMENTS,
     n_terciles: int = N_TERCILES,
+    domain: str = "slot",
 ) -> dict:
     """Return a rectangular grid of mean metric values for heatmap plotting.
 
@@ -236,7 +260,7 @@ def warm_rate_grid(
             "y_labels": ["S1", "S2", ..., "S12"],
         }
     """
-    per = per_stratum_stats(conn, metric, n_segments, n_terciles)
+    per = per_stratum_stats(conn, metric, n_segments, n_terciles, domain)
     z: list[list[float | None]] = [[None] * n_terciles for _ in range(n_segments)]
     n: list[list[int]] = [[0] * n_terciles for _ in range(n_segments)]
     for s in per:
@@ -255,13 +279,14 @@ def blocks_by_tercile(
     metric: str = "warm_rate",
     n_segments: int = N_SEGMENTS,
     n_terciles: int = N_TERCILES,
+    domain: str = "slot",
 ) -> dict[int, list[float]]:
     """Return {gas_tercile: [metric_values...]} pooled across all segments.
 
     Useful for grouped-violin plots per tercile.
     """
     strata = assign_strata(conn, n_segments, n_terciles)
-    rates = _warm_rates_by_block(conn)
+    rates = _warm_rates_by_block(conn, domain)
     out: dict[int, list[float]] = {t: [] for t in range(1, n_terciles + 1)}
     for s in strata:
         r = rates.get(s["block"])

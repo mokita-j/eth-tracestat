@@ -52,6 +52,56 @@ def per_block_warm(conn: sqlite3.Connection) -> list[dict]:
     return result
 
 
+def per_block_warm_accounts(conn: sqlite3.Connection) -> list[dict]:
+    """Account-level analog of per_block_warm, computed from the calls table.
+
+    A CALL-family opcode that targets an address is 'warm' if the same address
+    was already called earlier in the same block. Per block:
+
+      T       = total account calls
+      U_tx    = unique (tx_idx, address) rows
+      U_block = unique addresses
+
+    Decomposition:
+      within_warm = T - U_tx    (calls to an already-called address within one tx)
+      cross_warm  = U_tx - U_block  (first-in-tx call to an address that was
+                                     touched by an earlier tx in the same block)
+      cold        = U_block     (genuinely first call to this address in block)
+
+    Each dict: {block, T, U_tx, U_block, within_warm, cross_warm,
+                warm_rate, within_rate, cross_rate}
+    """
+    rows = conn.execute("""
+        SELECT
+            block_num,
+            SUM(call_count)           AS T,
+            COUNT(*)                  AS U_tx,
+            COUNT(DISTINCT address)   AS U_block
+        FROM calls
+        GROUP BY block_num
+        ORDER BY block_num
+    """).fetchall()
+
+    result = []
+    for block_num, T, U_tx, U_block in rows:
+        if T == 0:
+            continue
+        within_warm = T - U_tx
+        cross_warm = U_tx - U_block
+        result.append({
+            "block": block_num,
+            "T": T,
+            "U_tx": U_tx,
+            "U_block": U_block,
+            "within_warm": within_warm,
+            "cross_warm": cross_warm,
+            "warm_rate": (T - U_block) / T,
+            "within_rate": within_warm / T,
+            "cross_rate": cross_warm / T,
+        })
+    return result
+
+
 def per_block_concentration(conn: sqlite3.Connection) -> list[dict]:
     """Return per-block concentration metrics.
 

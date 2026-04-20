@@ -217,24 +217,92 @@ def main():
             blocks_by_tercile as _strat_byterc,
             per_stratum_stats as _strat_per,
         )
-        _mean_info = _strat_mean(conn, "warm_rate")
+
+        def _mean_info_dict(info):
+            return {
+                "mean": info["mean"],
+                "sem": info["sem"],
+                "ci95_low": info["ci95_low"],
+                "ci95_high": info["ci95_high"],
+                "naive_mean": info["naive_mean"],
+                "n_populated": info["n_strata_populated"],
+                "n_blocks": info["n_blocks"],
+            }
+
+        _mean_info_slot = _strat_mean(conn, "warm_rate", domain="slot")
+        _cross_slot     = _strat_mean(conn, "cross_rate", domain="slot")
+        _mean_info_acct = _strat_mean(conn, "warm_rate", domain="account")
+        _cross_acct     = _strat_mean(conn, "cross_rate", domain="account")
+
         data["stratification"] = {
-            "per_stratum": _strat_per(conn, "warm_rate"),
-            "grid": _strat_grid(conn, "warm_rate"),
-            "by_tercile": {str(k): v for k, v in _strat_byterc(conn, "warm_rate").items()},
-            "mean_info": {
-                "mean": _mean_info["mean"],
-                "sem": _mean_info["sem"],
-                "ci95_low": _mean_info["ci95_low"],
-                "ci95_high": _mean_info["ci95_high"],
-                "naive_mean": _mean_info["naive_mean"],
-                "n_populated": _mean_info["n_strata_populated"],
-                "n_blocks": _mean_info["n_blocks"],
-            },
+            "per_stratum": _strat_per(conn, "warm_rate", domain="slot"),
+            "grid": _strat_grid(conn, "warm_rate", domain="slot"),
+            "by_tercile": {str(k): v for k, v in _strat_byterc(conn, "warm_rate", domain="slot").items()},
+            "mean_info": _mean_info_dict(_mean_info_slot),
+        }
+        data["stratification_extras"] = {
+            "slot_cross":    _mean_info_dict(_cross_slot),
+            "account_mean":  _mean_info_dict(_mean_info_acct),
+            "account_cross": _mean_info_dict(_cross_acct),
         }
     except Exception as _e:
         data["stratification"] = {}
+        data["stratification_extras"] = {}
         print(f"Stratification skipped: {_e}")
+
+    # Account-level analysis (Phase 2 companion)
+    try:
+        from eth_tracestat.warm_analysis import per_block_warm_accounts as _pbwa
+        data["account_analysis"] = {
+            "per_block_warm": _pbwa(conn),
+        }
+    except Exception as _e:
+        data["account_analysis"] = {}
+        print(f"Account analysis skipped: {_e}")
+
+    # Reuse correlation scatter data (block, tercile, slot_warm, acct_warm)
+    try:
+        scatter_rows = conn.execute("""
+            WITH seg AS (
+                SELECT block_num, gas_used,
+                       NTILE(12) OVER (ORDER BY block_num) AS segment
+                FROM blocks WHERE gas_used IS NOT NULL
+            ),
+            terciled AS (
+                SELECT block_num, segment,
+                       NTILE(3) OVER (PARTITION BY segment ORDER BY gas_used) AS gas_tercile
+                FROM seg
+            ),
+            slot AS (
+                SELECT block_num,
+                       SUM(sload_count + sstore_count) AS T,
+                       COUNT(DISTINCT address || '|' || slot) AS U
+                FROM storage_ops GROUP BY block_num
+            ),
+            acct AS (
+                SELECT block_num,
+                       SUM(call_count) AS T,
+                       COUNT(DISTINCT address) AS U
+                FROM calls GROUP BY block_num
+            )
+            SELECT t.block_num, t.gas_tercile,
+                   (slot.T - slot.U) * 1.0 / slot.T,
+                   (acct.T - acct.U) * 1.0 / acct.T
+            FROM terciled t
+            JOIN slot ON slot.block_num = t.block_num AND slot.T > 0
+            JOIN acct ON acct.block_num = t.block_num AND acct.T > 0
+            ORDER BY t.block_num
+        """).fetchall()
+        data["reuse_correlation"] = [
+            {
+                "block": r[0], "tercile": r[1],
+                "slot_warm": round(r[2], 6), "acct_warm": round(r[3], 6),
+            }
+            for r in scatter_rows
+        ]
+    except Exception as _e:
+        data["reuse_correlation"] = []
+        print(f"Reuse correlation skipped: {_e}")
 
     conn.close()
 

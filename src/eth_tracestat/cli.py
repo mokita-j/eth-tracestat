@@ -47,6 +47,8 @@ def parse_args():
                    help="Print warm-rate summary stats from a results.db and exit")
     p.add_argument("--strat-report", metavar="DB",
                    help="Print stratified warm-rate summary (12×3 strata) and exit")
+    p.add_argument("--account-report", metavar="DB",
+                   help="Print account-level reuse summary and exit")
     return p.parse_args()
 
 
@@ -211,6 +213,53 @@ def _print_strat_report(db_path: str) -> None:
     conn.close()
 
 
+def _print_account_report(db_path: str) -> None:
+    import sqlite3
+    from .warm_analysis import per_block_warm_accounts, per_block_warm
+    from .stratification import stratified_mean
+
+    conn = sqlite3.connect(db_path)
+    slot = per_block_warm(conn)
+    acct = per_block_warm_accounts(conn)
+    if not slot or not acct:
+        print("Insufficient data.", file=sys.stderr)
+        conn.close()
+        return
+
+    def _totals(rows):
+        T = sum(r["T"] for r in rows)
+        within = sum(r["within_warm"] for r in rows)
+        cross = sum(r["cross_warm"] for r in rows)
+        cold = sum(r["U_block"] for r in rows)
+        return T, within, cross, cold
+
+    T_s, W_s, X_s, C_s = _totals(slot)
+    T_a, W_a, X_a, C_a = _totals(acct)
+
+    print("\n=== Account-level vs slot-level reuse ===\n")
+    print(f"  {'':<12}  {'Total':>12}  {'Cold':>11}  {'Within-tx':>11}  {'Cross-tx':>11}  {'Warm%':>7}  {'Cross%':>7}")
+    print(f"  {'Slots':<12}  {T_s:>12,}  {C_s:>11,}  {W_s:>11,}  {X_s:>11,}  {(W_s+X_s)/T_s:>6.2%}  {X_s/T_s:>6.2%}")
+    print(f"  {'Accounts':<12}  {T_a:>12,}  {C_a:>11,}  {W_a:>11,}  {X_a:>11,}  {(W_a+X_a)/T_a:>6.2%}  {X_a/T_a:>6.2%}")
+    print()
+
+    for dom, lbl in [("slot", "Slot"), ("account", "Account")]:
+        try:
+            total = stratified_mean(conn, "warm_rate", domain=dom)
+            cross = stratified_mean(conn, "cross_rate", domain=dom)
+            within = stratified_mean(conn, "within_rate", domain=dom)
+            print(f"  {lbl} stratified (population estimates):")
+            print(f"    warm  : {total['mean']:.4f}  SE {total['sem']:.4f}  "
+                  f"95% CI [{total['ci95_low']:.4f}, {total['ci95_high']:.4f}]")
+            print(f"    within: {within['mean']:.4f}  SE {within['sem']:.4f}")
+            print(f"    cross : {cross['mean']:.4f}  SE {cross['sem']:.4f}   "
+                  f"← opportunity for block-scoped {lbl.lower()} caching")
+            print()
+        except Exception as e:
+            print(f"  {lbl}: stratified estimates failed — {e}")
+
+    conn.close()
+
+
 def main():
     args = parse_args()
 
@@ -220,6 +269,10 @@ def main():
 
     if args.strat_report:
         _print_strat_report(args.strat_report)
+        return
+
+    if args.account_report:
+        _print_account_report(args.account_report)
         return
 
     # Open cache / results DB
