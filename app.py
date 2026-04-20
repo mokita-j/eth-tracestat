@@ -290,56 +290,61 @@ def _(is_local, local_conn, mo, static_data):
 
 @app.cell
 def _(mo):
-    mo.accordion({
-        "📖 Glossary — click to expand": mo.md("""
-        <div style="font-size: 0.9rem; line-height: 1.65; color: #334155; max-width: 820px;">
+    _glossary_html = """
+    <style>
+    .glossary-block { font-size: 0.9rem; line-height: 1.6; color: #334155; max-width: 840px; }
+    .glossary-block h4 { margin: 18px 0 6px 0 !important; font-size: 0.95rem !important; color: #0f172a !important; }
+    .glossary-block table { border-collapse: collapse; margin: 4px 0 8px 0; width: 100%; }
+    .glossary-block td { vertical-align: top; padding: 6px 10px; border-top: 1px solid #e2e8f0; }
+    .glossary-block td:first-child { white-space: nowrap; width: 1%; font-weight: 600; color: #1e293b; }
+    .glossary-block code { background: #f1f5f9; padding: 1px 5px; border-radius: 3px; font-size: 0.82rem; }
+    .glossary-block .ident { background: #fef3c7; padding: 8px 12px; border-radius: 4px; border-left: 3px solid #f59e0b; margin: 8px 0; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
+    </style>
 
-        **Two reuse levels:**
+    <div class="glossary-block">
 
-        | | |
-        |---|---|
-        | **Slot access** | An SLOAD or SSTORE opcode targeting a specific `(address, slot)` pair. |
-        | **Account access** | A CALL / STATICCALL / DELEGATECALL / CALLCODE opcode targeting a contract address. |
+      <h4>Two reuse levels</h4>
+      <table>
+        <tr><td>Slot access</td><td>An <code>SLOAD</code> or <code>SSTORE</code> opcode targeting a specific <code>(address, slot)</code> pair.</td></tr>
+        <tr><td>Account access</td><td>A <code>CALL</code> / <code>STATICCALL</code> / <code>DELEGATECALL</code> / <code>CALLCODE</code> opcode targeting a contract address.</td></tr>
+      </table>
 
-        **Three access states (per access):**
+      <h4>Three access states (every access is one of these)</h4>
+      <table>
+        <tr><td>Cold</td><td>The first time this target is touched in the block. Count: one per unique target per block.</td></tr>
+        <tr><td>Within-tx warm</td><td>A repeat access to the same target inside the same transaction. Any execution engine with opcode-level caching already exploits this.</td></tr>
+        <tr><td>Cross-tx warm</td><td>A first-in-tx access to a target that an <i>earlier transaction in the same block</i> already touched. Exploiting these requires block-scoped caching.</td></tr>
+      </table>
+      <div class="ident">Identity:&nbsp;&nbsp;cold + within + cross = T</div>
 
-        | | |
-        |---|---|
-        | **Cold** | The first time this access target was touched in the block. One per unique target per block. |
-        | **Within-tx warm** | A repeat access to the same target inside the same transaction. Any execution engine with opcode-level caching already exploits this. |
-        | **Cross-tx warm** | A first-in-tx access to a target that an earlier transaction in the same block already touched. Exploiting these requires <b>block-scoped caching</b>. |
+      <h4>Counting symbols</h4>
+      <table>
+        <tr><td><code>T</code></td><td>Total accesses in the block (sum of every access op).</td></tr>
+        <tr><td><code>U_tx</code></td><td>Unique <code>(tx_idx, target)</code> tuples — each (tx × target) combination counted once.</td></tr>
+        <tr><td><code>U_block</code></td><td>Unique targets in the block regardless of tx — each <code>(address, slot)</code> pair counted once, or each address counted once for the account metric.</td></tr>
+      </table>
 
-        **Identity:** every access is exactly one of the three. `cold + within + cross = T`.
+      <h4>Derived metrics</h4>
+      <table>
+        <tr><td>Warm rate</td><td><code>(T − U_block) / T</code> &nbsp; — share of accesses that are repeats of any kind.</td></tr>
+        <tr><td>Within-tx rate</td><td><code>(T − U_tx) / T</code> &nbsp; — share that are repeats inside one tx.</td></tr>
+        <tr><td>Cross-tx rate</td><td><code>(U_tx − U_block) / T</code> &nbsp; — share that are repeats across txs in the same block.</td></tr>
+        <tr><td>Cross / total warm</td><td><code>cross / (within + cross)</code> &nbsp; — of the warm accesses, what fraction is cross-tx.</td></tr>
+      </table>
 
-        **Counting symbols used throughout:**
+      <h4>Stratified population estimate</h4>
+      <p style="margin: 4px 0;">1,224 blocks sampled across <b>36 strata</b> (12 time segments × 3 gas terciles). Each stratum weighted 1/36.</p>
+      <table>
+        <tr><td><code>ȳₕ</code></td><td>Mean of the metric over blocks in stratum h.</td></tr>
+        <tr><td>Stratified mean</td><td><code>ȳ_str = Σₕ wₕ · ȳₕ</code> &nbsp; with <code>wₕ = 1/36</code>.</td></tr>
+        <tr><td>SE (standard error)</td><td><code>√(Σₕ wₕ² · SEMₕ²)</code> &nbsp; where <code>SEMₕ = sₕ/√nₕ</code>.</td></tr>
+        <tr><td>95% CI</td><td><code>ȳ_str ± 1.96 · SE</code>.</td></tr>
+        <tr><td>Naive mean</td><td>Simple unweighted average across sampled blocks. Shown alongside the stratified mean for comparison — if the sample is balanced, the two are nearly identical.</td></tr>
+      </table>
 
-        | | |
-        |---|---|
-        | `T` | Total accesses in the block (sum of all access ops). |
-        | `U_tx` | Unique `(tx_idx, target)` tuples in the block — i.e., each tx × target combination counted once. |
-        | `U_block` | Unique targets in the block regardless of tx — each `(address, slot)` pair counted once, or each address counted once for the account metric. |
-
-        From which every metric falls out:
-
-        | | |
-        |---|---|
-        | **Warm rate** | `(T − U_block) / T` |
-        | **Within-tx rate** | `(T − U_tx) / T` |
-        | **Cross-tx rate** | `(U_tx − U_block) / T` |
-
-        **Stratified estimators:** 1,224 blocks sampled across <b>36 strata</b> (12 time segments × 3 gas terciles). Each stratum weighted 1/36.
-
-        | | |
-        |---|---|
-        | `ȳₕ` | Mean of the metric over blocks in stratum h. |
-        | **Stratified mean** | `ȳ_str = Σₕ wₕ · ȳₕ` with `wₕ = 1/36`. |
-        | **SE (standard error)** | `√(Σₕ wₕ² · SEMₕ²)` where `SEMₕ = sₕ/√nₕ`. |
-        | **95% CI** | `ȳ_str ± 1.96 · SE`. |
-        | **Naive mean** | Simple unweighted average across sampled blocks (shown for comparison — if sample is balanced, it equals the stratified mean). |
-
-        </div>
-        """)
-    }, lazy=False)
+    </div>
+    """
+    mo.accordion({"📖 Glossary — click to expand": mo.md(_glossary_html)}, lazy=False)
     return
 
 
@@ -534,23 +539,28 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
         _mean_cross = sum(_cross_vals) / len(_cross_vals)
         _mean_total = _mean_within + _mean_cross
 
-        def _sc3(label, value, color="#1e293b"):
+        def _sc3(label, value, hint="", color="#1e293b"):
+            hint_html = (
+                f'<div style="font-size: 0.68rem; color: #64748b; margin-top: 3px; line-height: 1.25; font-family: Inter, sans-serif;">{hint}</div>'
+                if hint else ""
+            )
             return (
-                f'<div style="flex: 1; min-width: 100px; background: #f8fafc; '
-                f'border-radius: 6px; padding: 8px 12px; text-align: center;">'
+                f'<div style="flex: 1; min-width: 160px; background: #f8fafc; '
+                f'border-radius: 6px; padding: 10px 12px; text-align: center;">'
                 f'<div style="font-size: 0.7rem; font-weight: 600; text-transform: uppercase; '
                 f'letter-spacing: 0.05em; color: #94a3b8; margin-bottom: 2px;">{label}</div>'
                 f'<div style="font-size: 1rem; font-weight: 600; color: {color}; '
                 f'font-variant-numeric: tabular-nums;">{value}</div>'
+                f'{hint_html}'
                 f'</div>'
             )
 
         _stats2 = mo.md(
             f'<div style="display: flex; gap: 8px; flex-wrap: wrap;">'
-            f'{_sc3("Mean total warm", f"{_mean_total:.3f}")}'
-            f'{_sc3("Mean within-tx", f"{_mean_within:.3f}", "#3b82f6")}'
-            f'{_sc3("Mean cross-tx", f"{_mean_cross:.3f}", "#f59e0b")}'
-            f'{_sc3("Cross / total warm", f"{_mean_cross / _mean_total:.1%}" if _mean_total else "—")}'
+            f'{_sc3("Warm rate", f"{_mean_total:.3f}", "share of accesses that are repeats (mean across blocks)")}'
+            f'{_sc3("Within-tx share", f"{_mean_within:.3f}", "repeats inside one tx · already exploited by any engine", "#3b82f6")}'
+            f'{_sc3("Cross-tx share", f"{_mean_cross:.3f}", "repeats across txs in same block · block-cache opportunity", "#f59e0b")}'
+            f'{_sc3("Cross ÷ warm", f"{_mean_cross / _mean_total:.1%}" if _mean_total else "—", "of all warm accesses, fraction that is cross-tx")}'
             f'</div>'
         )
 
@@ -652,10 +662,10 @@ def _(block_from, block_to, is_local, local_conn, mo, static_data):
 
             _stats2_acct = mo.md(
                 f'<div style="display: flex; gap: 8px; flex-wrap: wrap;">'
-                f'{_sc3("Mean total warm (acct)", f"{_a_total_mean:.3f}")}'
-                f'{_sc3("Mean within-tx (acct)", f"{_a_within_mean:.3f}", "#8b5cf6")}'
-                f'{_sc3("Mean cross-tx (acct)", f"{_a_cross_mean:.3f}", "#ef4444")}'
-                f'{_sc3("Cross / total (acct)", f"{_a_cross_mean / _a_total_mean:.1%}" if _a_total_mean else "—")}'
+                f'{_sc3("Warm rate (acct)", f"{_a_total_mean:.3f}", "share of CALL-family ops that are repeats (mean/block)")}'
+                f'{_sc3("Within-tx share (acct)", f"{_a_within_mean:.3f}", "repeats inside one tx", "#8b5cf6")}'
+                f'{_sc3("Cross-tx share (acct)", f"{_a_cross_mean:.3f}", "repeats across txs in same block", "#ef4444")}'
+                f'{_sc3("Cross ÷ warm (acct)", f"{_a_cross_mean / _a_total_mean:.1%}" if _a_total_mean else "—", "cross-tx as fraction of all warm account accesses")}'
                 f'</div>'
             )
 
