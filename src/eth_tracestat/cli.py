@@ -43,6 +43,12 @@ def parse_args():
     p.add_argument("--json-out", help="Write summary JSON results to file")
     p.add_argument("--html-out",
                    help="Write HTML report with charts")
+    p.add_argument("--warm-report", metavar="DB",
+                   help="Print warm-rate summary stats from a results.db and exit")
+    p.add_argument("--strat-report", metavar="DB",
+                   help="Print stratified warm-rate summary (12×3 strata) and exit")
+    p.add_argument("--account-report", metavar="DB",
+                   help="Print account-level reuse summary and exit")
     return p.parse_args()
 
 
@@ -110,8 +116,164 @@ def fetch_or_cache(url: str | None, block_num: int, cache: TraceCache | None) ->
     return block_data, traces
 
 
+def _print_warm_report(db_path: str) -> None:
+    from .sample import connect_with_sample
+    from .warm_analysis import per_block_warm, warm_by_contract
+
+    conn = connect_with_sample(db_path)
+    rows = per_block_warm(conn)
+    if not rows:
+        print("No data in results DB.", file=sys.stderr)
+        conn.close()
+        return
+
+    warm_rates = [r["warm_rate"] for r in rows]
+    within_rates = [r["within_rate"] for r in rows]
+    cross_rates = [r["cross_rate"] for r in rows]
+    n = len(warm_rates)
+
+    def _stats(vals, label):
+        s = sorted(vals)
+        mean = sum(s) / len(s)
+        p5 = s[max(0, int(0.05 * len(s)) - 1)]
+        p50 = s[len(s) // 2]
+        p95 = s[min(len(s) - 1, int(0.95 * len(s)))]
+        print(f"  {label:<22}  mean={mean:.4f}  p5={p5:.4f}  p50={p50:.4f}  p95={p95:.4f}")
+
+    total_T = sum(r["T"] for r in rows)
+    total_warm = sum(r["within_warm"] + r["cross_warm"] for r in rows)
+    total_within = sum(r["within_warm"] for r in rows)
+    total_cross = sum(r["cross_warm"] for r in rows)
+
+    print(f"\n=== Warm-rate report — {n} blocks ===")
+    print(f"\n  Total accesses     : {total_T:,}")
+    print(f"  Total warm         : {total_warm:,}  ({total_warm / total_T:.4f})")
+    print(f"  Within-tx warm     : {total_within:,}  ({total_within / total_T:.4f})")
+    print(f"  Cross-tx warm      : {total_cross:,}  ({total_cross / total_T:.4f})")
+    print(f"  Cross / total warm : {total_cross / total_warm:.4f}" if total_warm else "")
+    print()
+    _stats(warm_rates, "Warm rate")
+    _stats(within_rates, "Within-tx rate")
+    _stats(cross_rates, "Cross-tx rate")
+
+    contracts = warm_by_contract(conn)[:10]
+    if contracts:
+        print(f"\n  Top 10 contracts by warm accesses:")
+        for i, c in enumerate(contracts, 1):
+            print(f"  {i:>2}. {c['address']}  warm={c['warm_accesses']:,}")
+
+    conn.close()
+
+
+def _print_strat_report(db_path: str) -> None:
+    from .sample import connect_with_sample
+    from .stratification import stratified_mean, per_stratum_stats
+
+    conn = connect_with_sample(db_path)
+    n_with_gas = conn.execute(
+        "SELECT COUNT(*) FROM blocks WHERE gas_used IS NOT NULL"
+    ).fetchone()[0]
+    n_total = conn.execute("SELECT COUNT(*) FROM blocks").fetchone()[0]
+    if n_with_gas == 0:
+        print(f"No blocks with gas_used populated (out of {n_total}).", file=sys.stderr)
+        conn.close()
+        return
+
+    print(f"\n=== Stratified warm-rate report — {n_with_gas} blocks "
+          f"(of {n_total} total), 12 × 3 = 36 strata ===\n")
+
+    for metric in ("warm_rate", "within_rate", "cross_rate"):
+        r = stratified_mean(conn, metric)
+        if r["mean"] is None:
+            continue
+        print(f"  {metric:<12}  strat_mean={r['mean']:.4f}  SE={r['sem']:.4f}  "
+              f"95%CI=[{r['ci95_low']:.4f}, {r['ci95_high']:.4f}]  "
+              f"naive={r['naive_mean']:.4f}  Δ={r['mean'] - r['naive_mean']:+.4f}")
+
+    print(f"\n  Populated strata: {r['n_strata_populated']} / 36")
+
+    # Per-segment roll-up (averaging over terciles)
+    per = per_stratum_stats(conn, "warm_rate")
+    print("\n  Segment roll-up (mean of tercile means):")
+    for seg in range(1, 13):
+        rows = [p for p in per if p["segment"] == seg and p["n"] > 0]
+        if not rows:
+            print(f"    Seg {seg:>2}: (empty)")
+            continue
+        seg_mean = sum(p["mean"] for p in rows) / len(rows)
+        n_blocks = sum(p["n"] for p in rows)
+        tercile_means = [
+            f"{next((p['mean'] for p in rows if p['gas_tercile'] == t), float('nan')):.4f}"
+            for t in (1, 2, 3)
+        ]
+        print(f"    Seg {seg:>2}: mean={seg_mean:.4f}  "
+              f"terciles=[{', '.join(tercile_means)}]  "
+              f"n={n_blocks}")
+
+    conn.close()
+
+
+def _print_account_report(db_path: str) -> None:
+    from .sample import connect_with_sample
+    from .warm_analysis import per_block_warm_accounts, per_block_warm
+    from .stratification import stratified_mean
+
+    conn = connect_with_sample(db_path)
+    slot = per_block_warm(conn)
+    acct = per_block_warm_accounts(conn)
+    if not slot or not acct:
+        print("Insufficient data.", file=sys.stderr)
+        conn.close()
+        return
+
+    def _totals(rows):
+        T = sum(r["T"] for r in rows)
+        within = sum(r["within_warm"] for r in rows)
+        cross = sum(r["cross_warm"] for r in rows)
+        cold = sum(r["U_block"] for r in rows)
+        return T, within, cross, cold
+
+    T_s, W_s, X_s, C_s = _totals(slot)
+    T_a, W_a, X_a, C_a = _totals(acct)
+
+    print("\n=== Account-level vs slot-level reuse ===\n")
+    print(f"  {'':<12}  {'Total':>12}  {'Cold':>11}  {'Within-tx':>11}  {'Cross-tx':>11}  {'Warm%':>7}  {'Cross%':>7}")
+    print(f"  {'Slots':<12}  {T_s:>12,}  {C_s:>11,}  {W_s:>11,}  {X_s:>11,}  {(W_s+X_s)/T_s:>6.2%}  {X_s/T_s:>6.2%}")
+    print(f"  {'Accounts':<12}  {T_a:>12,}  {C_a:>11,}  {W_a:>11,}  {X_a:>11,}  {(W_a+X_a)/T_a:>6.2%}  {X_a/T_a:>6.2%}")
+    print()
+
+    for dom, lbl in [("slot", "Slot"), ("account", "Account")]:
+        try:
+            total = stratified_mean(conn, "warm_rate", domain=dom)
+            cross = stratified_mean(conn, "cross_rate", domain=dom)
+            within = stratified_mean(conn, "within_rate", domain=dom)
+            print(f"  {lbl} stratified (population estimates):")
+            print(f"    warm  : {total['mean']:.4f}  SE {total['sem']:.4f}  "
+                  f"95% CI [{total['ci95_low']:.4f}, {total['ci95_high']:.4f}]")
+            print(f"    within: {within['mean']:.4f}  SE {within['sem']:.4f}")
+            print(f"    cross : {cross['mean']:.4f}  SE {cross['sem']:.4f}   "
+                  f"← opportunity for block-scoped {lbl.lower()} caching")
+            print()
+        except Exception as e:
+            print(f"  {lbl}: stratified estimates failed — {e}")
+
+    conn.close()
+
+
 def main():
     args = parse_args()
+
+    if args.warm_report:
+        _print_warm_report(args.warm_report)
+        return
+
+    if args.strat_report:
+        _print_strat_report(args.strat_report)
+        return
+
+    if args.account_report:
+        _print_account_report(args.account_report)
+        return
 
     # Open cache / results DB
     cache = None
